@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+**/dist
+.git
+.gitignore
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+data
+e2e
+playwright-report
+test-results
+.env
+.env.*

@@ -1,0 +1,156 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+:root {
+  --surface-bg: #faf9f6;
+  --surface-card: #ffffff;
+  --surface-subtle: #f4f3ef;
+  --surface-border: #e7e5e4;
+
+  --accent-breast: #0d9488;
+  --accent-breast-soft: #f0fdfa;
+  --accent-bottle: #0284c7;
+  --accent-bottle-soft: #f0f9ff;
+  --accent-sleep: #4f46e5;
+  --accent-sleep-soft: #eef2ff;
+  --accent-diaper: #d97706;
+  --accent-diaper-soft: #fffbeb;
+  --accent-spitup: #e11d48;
+  --accent-spitup-soft: #fff1f2;
+}
+
+.dark {
+  --surface-bg: #0b1020;
+  --surface-card: #111827;
+  --surface-subtle: #182235;
+  --surface-border: #1e293b;
+
+  --accent-breast: #2dd4bf;
+  --accent-breast-soft: rgba(13, 148, 136, 0.16);
+  --accent-bottle: #38bdf8;
+  --accent-bottle-soft: rgba(2, 132, 199, 0.16);
+  --accent-sleep: #818cf8;
+  --accent-sleep-soft: rgba(79, 70, 229, 0.16);
+  --accent-diaper: #fbbf24;
+  --accent-diaper-soft: rgba(217, 119, 6, 0.16);
+  --accent-spitup: #fb7185;
+  --accent-spitup-soft: rgba(225, 29, 72, 0.16);
+}
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+    font-family: var(--font-sans);
+  }
+
+  body {
+    background-color: var(--surface-bg);
+    @apply text-slate-900 antialiased dark:text-slate-100;
+  }
+}
+
+/* Distinctive card & category accent utilities */
+.bt-surface {
+  background-color: var(--surface-bg);
+}
+
+.bt-card {
+  background-color: var(--surface-card);
+  border: 1px solid var(--surface-border);
+  @apply rounded-2xl shadow-xs transition-shadow;
+}
+
+.bt-card-breast {
+  border-top: 3px solid var(--accent-breast);
+}
+
+.bt-card-bottle {
+  border-top: 3px solid var(--accent-bottle);
+}
+
+.bt-card-sleep {
+  border-top: 3px solid var(--accent-sleep);
+}
+
+.bt-card-diaper {
+  border-top: 3px solid var(--accent-diaper);
+}
+
+.bt-card-spitup {
+  border-top: 3px solid var(--accent-spitup);
+}
+
+.bt-badge-breast {
+  background-color: var(--accent-breast-soft);
+  color: var(--accent-breast);
+}
+
+.bt-badge-bottle {
+  background-color: var(--accent-bottle-soft);
+  color: var(--accent-bottle);
+}
+
+.bt-badge-sleep {
+  background-color: var(--accent-sleep-soft);
+  color: var(--accent-sleep);
+}
+
+.bt-badge-diaper {
+  background-color: var(--accent-diaper-soft);
+  color: var(--accent-diaper);
+}
+
+.bt-badge-spitup {
+  background-color: var(--accent-spitup-soft);
+  color: var(--accent-spitup);
+}
+
+.bt-focus-ring {
+  @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-slate-950;
+}
+
+.tabular-nums-clock {
+  font-variant-numeric: tabular-nums;
+}
+
+.pb-safe {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
+.print-only {
+  display: none;
+}
+
+@media print {
+  @page {
+    margin: 12mm;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-size: 11pt;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  .print-only * {
+    color: #000000 !important;
+    border-color: #cbd5e1 !important;
+  }
+}
