@@ -10,7 +10,7 @@ COPY apps/server/package.json apps/server/package.json
 # Copy optional apps/web/package.json if present (wildcard avoids failing when absent)
 COPY apps/web/package.json* apps/web/
 
-RUN npm ci --workspaces --if-present
+RUN npm ci
 
 COPY packages/shared packages/shared
 COPY apps/server apps/server
