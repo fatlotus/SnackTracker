@@ -110,7 +110,9 @@ export function exportEventsToCsv(
     const effectiveEndMs =
       event.endedAt !== null ? Date.parse(event.endedAt) : Math.max(startMs, nowMs);
     const durationMinutes =
-      event.type === 'diaper' || event.type === 'spit_up'
+      event.type === 'diaper' ||
+      event.type === 'spit_up' ||
+      event.type === 'vitamin'
         ? ''
         : roundMinutes(Math.max(0, (effectiveEndMs - startMs) / 1000));
 
@@ -153,6 +155,8 @@ export function exportEventsToCsv(
       case 'spit_up':
         spitUpSeverity = event.payload.severity ?? '';
         relatedFeedId = event.payload.relatedFeedId ?? '';
+        break;
+      case 'vitamin':
         break;
     }
 
@@ -203,6 +207,7 @@ const DAILY_STATS_CSV_HEADERS = [
   'diaperEvents',
   'rashCount',
   'spitUpCount',
+  'vitaminGiven',
 ] as const;
 
 export function exportDailyStatsToCsv(
@@ -233,6 +238,7 @@ export function exportDailyStatsToCsv(
         day.diaperEventCount,
         day.rashCount,
         day.spitUpCount,
+        day.vitaminGiven,
       ]),
     );
   }
@@ -405,6 +411,7 @@ export function generatePediatricianSummary(
     `Feeding: ${totals.totalFeedCount} feeds total (${averagesPerDay.totalFeedCount.toFixed(1)}/day avg) — Breast: ${totals.breastFeedCount} (${formatHoursMinutes(totals.breastTotalSeconds)}), Bottle: ${totals.bottleFeedCount} (${Math.round(totals.bottleTotalMl)} ml total, ${Math.round(averagesPerDay.bottleTotalMl)} ml/day avg)`,
     `Diapers: ${totals.diaperEventCount} changes — ${totals.wetCount} wet (${averagesPerDay.wetCount.toFixed(1)}/day), ${totals.poopyCount} poopy (${averagesPerDay.poopyCount.toFixed(1)}/day), ${totals.bothCount} both${totals.rashCount > 0 ? `, ${totals.rashCount} rash flag(s)` : ''}`,
     `Spit-Up: ${totals.spitUpCount} total (${averagesPerDay.spitUpCount.toFixed(1)}/day avg)`,
+    `Vitamins: ${totals.vitaminDaysCount}/${days} day${days === 1 ? '' : 's'} given`,
   ];
 
   for (const row of summaryRows) {
@@ -415,7 +422,7 @@ export function generatePediatricianSummary(
   lines.push(isMd ? '## Day-by-Day Breakdown' : 'DAY-BY-DAY BREAKDOWN');
 
   for (const day of dailyStats) {
-    const dayLine = `${day.dateKey}: Sleep ${formatHoursMinutes(day.totalSleepSeconds)}, Feeds ${day.totalFeedCount} (Breast ${formatHoursMinutes(day.breastTotalSeconds)}, Bottle ${Math.round(day.bottleTotalMl)} ml), Diapers ${day.wetCount}W/${day.poopyCount}P, Spit-ups ${day.spitUpCount}`;
+    const dayLine = `${day.dateKey}: Sleep ${formatHoursMinutes(day.totalSleepSeconds)}, Feeds ${day.totalFeedCount} (Breast ${formatHoursMinutes(day.breastTotalSeconds)}, Bottle ${Math.round(day.bottleTotalMl)} ml), Diapers ${day.wetCount}W/${day.poopyCount}P, Spit-ups ${day.spitUpCount}, Vitamins ${day.vitaminGiven ? 'Yes' : 'No'}`;
     lines.push(isMd ? `- ${dayLine}` : `  ${dayLine}`);
   }
 

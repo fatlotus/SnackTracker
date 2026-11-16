@@ -10,6 +10,7 @@ import type {
   SpitUpEvent,
   SpitUpSeverity,
   TrackingEvent,
+  VitaminEvent,
 } from './schemas.js';
 
 // ============================================================================
@@ -262,6 +263,10 @@ export interface DailyStats {
   };
   linkedSpitUpCount: number;
   standaloneSpitUpCount: number;
+
+  // Vitamins
+  vitaminCount: number;
+  vitaminGiven: boolean;
 }
 
 export function createEmptyDailyStats(dateKey: string): DailyStats {
@@ -297,6 +302,8 @@ export function createEmptyDailyStats(dateKey: string): DailyStats {
     },
     linkedSpitUpCount: 0,
     standaloneSpitUpCount: 0,
+    vitaminCount: 0,
+    vitaminGiven: false,
   };
 }
 
@@ -465,6 +472,14 @@ export function computeDailyStats(
         }
         break;
       }
+
+      case 'vitamin': {
+        if (startsOnDay) {
+          stats.vitaminCount += 1;
+          stats.vitaminGiven = true;
+        }
+        break;
+      }
     }
   }
 
@@ -518,6 +533,7 @@ export interface PeriodMetrics {
   diaperEventCount: number;
   rashCount: number;
   spitUpCount: number;
+  vitaminDaysCount: number;
 }
 
 export interface PeriodAverages {
@@ -546,6 +562,7 @@ function createEmptyMetrics(): PeriodMetrics {
     diaperEventCount: 0,
     rashCount: 0,
     spitUpCount: 0,
+    vitaminDaysCount: 0,
   };
 }
 
@@ -577,6 +594,9 @@ export function computePeriodAverages(
     totals.diaperEventCount += day.diaperEventCount;
     totals.rashCount += day.rashCount;
     totals.spitUpCount += day.spitUpCount;
+    if (day.vitaminGiven) {
+      totals.vitaminDaysCount += 1;
+    }
   }
 
   const divisor = days > 0 ? days : 1;
@@ -599,6 +619,7 @@ export function computePeriodAverages(
     diaperEventCount: totals.diaperEventCount / divisor,
     rashCount: totals.rashCount / divisor,
     spitUpCount: totals.spitUpCount / divisor,
+    vitaminDaysCount: totals.vitaminDaysCount / divisor,
   };
 
   return { days, totals, averagesPerDay };
@@ -643,6 +664,12 @@ export interface LastSpitUpSummary {
   secondsSinceStart: number;
 }
 
+export interface LastVitaminSummary {
+  event: VitaminEvent;
+  startedAt: string;
+  secondsSinceStart: number;
+}
+
 export interface LastActivitySummary {
   lastFeed:
     | (LastTimedActivity<BreastFeedEvent | BottleFeedEvent> & {
@@ -654,6 +681,7 @@ export interface LastActivitySummary {
   lastSleep: LastSleepSummary | null;
   lastDiaper: LastDiaperSummary | null;
   lastSpitUp: LastSpitUpSummary | null;
+  lastVitamin: LastVitaminSummary | null;
 }
 
 function buildTimedActivity<T extends TrackingEvent>(
@@ -701,6 +729,7 @@ export function computeLastActivitySummary(
   let lastSleep: LastSleepSummary | null = null;
   let lastDiaper: LastDiaperSummary | null = null;
   let lastSpitUp: LastSpitUpSummary | null = null;
+  let lastVitamin: LastVitaminSummary | null = null;
   let lastFeed: LastActivitySummary['lastFeed'] = null;
 
   for (const event of sorted) {
@@ -749,6 +778,12 @@ export function computeLastActivitySummary(
         severity: event.payload.severity ?? null,
         secondsSinceStart: Math.max(0, (nowMs - Date.parse(event.startedAt)) / 1000),
       };
+    } else if (event.type === 'vitamin' && !lastVitamin) {
+      lastVitamin = {
+        event,
+        startedAt: event.startedAt,
+        secondsSinceStart: Math.max(0, (nowMs - Date.parse(event.startedAt)) / 1000),
+      };
     }
 
     if (
@@ -757,7 +792,8 @@ export function computeLastActivitySummary(
       lastBottleFeed &&
       lastSleep &&
       lastDiaper &&
-      lastSpitUp
+      lastSpitUp &&
+      lastVitamin
     ) {
       break;
     }
@@ -770,6 +806,7 @@ export function computeLastActivitySummary(
     lastSleep,
     lastDiaper,
     lastSpitUp,
+    lastVitamin,
   };
 }
 

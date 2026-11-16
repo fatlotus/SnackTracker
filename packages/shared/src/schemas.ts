@@ -241,6 +241,9 @@ export const SpitUpPayloadSchema = z.object({
 });
 export type SpitUpPayload = z.infer<typeof SpitUpPayloadSchema>;
 
+export const VitaminPayloadSchema = z.object({});
+export type VitaminPayload = z.infer<typeof VitaminPayloadSchema>;
+
 const baseEventFields = {
   id: uuidSchema,
   babyId: uuidSchema,
@@ -291,12 +294,20 @@ export const SpitUpEventSchema = z.object({
 });
 export type SpitUpEvent = z.infer<typeof SpitUpEventSchema>;
 
+export const VitaminEventSchema = z.object({
+  ...baseEventFields,
+  type: z.literal('vitamin'),
+  payload: VitaminPayloadSchema,
+});
+export type VitaminEvent = z.infer<typeof VitaminEventSchema>;
+
 export const TrackingEventTypeSchema = z.enum([
   'breast_feed',
   'bottle_feed',
   'sleep',
   'diaper',
   'spit_up',
+  'vitamin',
 ]);
 export type TrackingEventType = z.infer<typeof TrackingEventTypeSchema>;
 
@@ -307,6 +318,7 @@ export const TrackingEventSchema = z
     SleepEventSchema,
     DiaperEventSchema,
     SpitUpEventSchema,
+    VitaminEventSchema,
   ])
   .superRefine((event, ctx) => {
     if (event.endedAt !== null) {

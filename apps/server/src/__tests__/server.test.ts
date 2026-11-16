@@ -2243,4 +2243,144 @@ describe('Baby Tracker Server (M2)', () => {
     };
     expect(pull2Body.events[0]!.payload.kind).toBe('poopy');
   });
+
+  it('syncs vitamin events via push/pull and rejects viewer mutations', async () => {
+    const app = await createTestApp();
+
+    const ownerReg = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: {
+        email: 'vit-owner@example.com',
+        password: 'password123',
+        displayName: 'Owner',
+      },
+    });
+    expect(ownerReg.statusCode).toBe(201);
+    const ownerCookie = extractCookie(ownerReg);
+    const ownerId = (ownerReg.json() as { user: { id: string } }).user.id;
+
+    const viewerReg = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: {
+        email: 'vit-viewer@example.com',
+        password: 'password123',
+        displayName: 'Viewer',
+      },
+    });
+    expect(viewerReg.statusCode).toBe(201);
+    const viewerCookie = extractCookie(viewerReg);
+    const viewerId = (viewerReg.json() as { user: { id: string } }).user.id;
+
+    const babyId = crypto.randomUUID();
+    const vitaminId = crypto.randomUUID();
+    const now = '2026-06-15T09:00:00.000Z';
+
+    const pushBabyAndVit = await app.inject({
+      method: 'POST',
+      url: '/api/sync/push',
+      headers: { cookie: ownerCookie },
+      payload: {
+        mutations: [
+          {
+            mutationId: crypto.randomUUID(),
+            entityType: 'baby',
+            op: 'upsert',
+            clientUpdatedAt: now,
+            data: {
+              id: babyId,
+              name: 'Vit Baby',
+              dob: '2026-01-01',
+              avatarColor: '#059669',
+              isArchived: false,
+              createdByUserId: ownerId,
+              createdAt: now,
+              updatedAt: now,
+              deletedAt: null,
+            },
+          },
+          {
+            mutationId: crypto.randomUUID(),
+            entityType: 'event',
+            op: 'upsert',
+            clientUpdatedAt: now,
+            data: {
+              id: vitaminId,
+              babyId,
+              type: 'vitamin',
+              startedAt: now,
+              endedAt: now,
+              payload: {},
+              loggedByUserId: ownerId,
+              updatedByUserId: ownerId,
+              createdAt: now,
+              updatedAt: now,
+              deletedAt: null,
+            },
+          },
+        ],
+      },
+    });
+    expect(pushBabyAndVit.statusCode).toBe(200);
+    expect(pushBabyAndVit.json().rejected).toEqual([]);
+
+    const inviteRes = await app.inject({
+      method: 'POST',
+      url: `/api/babies/${babyId}/invites`,
+      headers: { cookie: ownerCookie },
+      payload: { role: 'viewer' },
+    });
+    expect(inviteRes.statusCode).toBe(201);
+    const inviteCode = (inviteRes.json() as { invite: { code: string } }).invite.code;
+
+    const acceptRes = await app.inject({
+      method: 'POST',
+      url: '/api/invites/accept',
+      headers: { cookie: viewerCookie },
+      payload: { code: inviteCode },
+    });
+    expect(acceptRes.statusCode).toBe(200);
+
+    const viewerPull = await app.inject({
+      method: 'GET',
+      url: '/api/sync/pull?since_seq=0',
+      headers: { cookie: viewerCookie },
+    });
+    expect(viewerPull.statusCode).toBe(200);
+    const pulledEvents = (viewerPull.json() as { events: Array<{ id: string; type: string }> }).events;
+    expect(pulledEvents.some((e) => e.id === vitaminId && e.type === 'vitamin')).toBe(true);
+
+    // Viewer cannot push a vitamin event
+    const viewerPush = await app.inject({
+      method: 'POST',
+      url: '/api/sync/push',
+      headers: { cookie: viewerCookie },
+      payload: {
+        mutations: [
+          {
+            mutationId: crypto.randomUUID(),
+            entityType: 'event',
+            op: 'upsert',
+            clientUpdatedAt: now,
+            data: {
+              id: crypto.randomUUID(),
+              babyId,
+              type: 'vitamin',
+              startedAt: now,
+              endedAt: now,
+              payload: {},
+              loggedByUserId: viewerId,
+              updatedByUserId: viewerId,
+              createdAt: now,
+              updatedAt: now,
+              deletedAt: null,
+            },
+          },
+        ],
+      },
+    });
+    expect(viewerPush.statusCode).toBe(200);
+    expect(viewerPush.json().rejected).toHaveLength(1);
+  });
 });

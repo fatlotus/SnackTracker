@@ -300,4 +300,55 @@ describe('JSON & pediatrician summary exporters', () => {
     expect(olderSummary).toContain('2 months old');
     expect(olderSummary).not.toContain('Birth Weight');
   });
+
+  it('exports vitamin events with empty durationMinutes and includes vitamin adherence in daily CSV & pediatrician summary', () => {
+    const vitaminEvent: TrackingEvent = {
+      id: '33333333-3333-4333-8333-333333333399',
+      babyId: BABY_ID,
+      type: 'vitamin',
+      startedAt: '2026-06-01T09:00:00.000Z',
+      endedAt: '2026-06-01T09:00:00.000Z',
+      notes: null,
+      loggedByUserId: USER_ID,
+      loggedByName: 'Alex',
+      updatedByUserId: USER_ID,
+      createdAt: '2026-06-01T09:00:00.000Z',
+      updatedAt: '2026-06-01T09:00:00.000Z',
+      deletedAt: null,
+      serverSeq: 12,
+      payload: {},
+    };
+
+    const eventsCsv = exportEventsToCsv([vitaminEvent], {
+      timeZone: 'UTC',
+      includeHeader: false,
+    });
+    expect(eventsCsv).toContain(
+      ',vitamin,2026-06-01,2026-06-01 09:00:00,2026-06-01 09:00:00,,',
+    );
+
+    const dailyStats = computeDateRangeStats(
+      [vitaminEvent],
+      '2026-06-01',
+      '2026-06-02',
+      'UTC',
+    );
+    const dailyCsv = exportDailyStatsToCsv(dailyStats, true);
+    expect(dailyCsv).toContain('vitaminGiven');
+    expect(dailyCsv).toContain('2026-06-01,');
+    expect(dailyCsv.split('\r\n')[1]!.endsWith(',true')).toBe(true);
+    expect(dailyCsv.split('\r\n')[2]!.endsWith(',false')).toBe(true);
+
+    const summary = generatePediatricianSummary({
+      baby,
+      events: [vitaminEvent],
+      startDateKey: '2026-06-01',
+      endDateKey: '2026-06-02',
+      timeZone: 'UTC',
+      format: 'text',
+    });
+    expect(summary).toContain('Vitamins: 1/2 days given');
+    expect(summary).toContain('2026-06-01: Sleep 0h 0m, Feeds 0 (Breast 0h 0m, Bottle 0 ml), Diapers 0W/0P, Spit-ups 0, Vitamins Yes');
+    expect(summary).toContain('2026-06-02: Sleep 0h 0m, Feeds 0 (Breast 0h 0m, Bottle 0 ml), Diapers 0W/0P, Spit-ups 0, Vitamins No');
+  });
 });

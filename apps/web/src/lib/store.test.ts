@@ -299,4 +299,64 @@ describe('store (IndexedDB + atomic outbox + timers)', () => {
     expect((await getActiveTimersForBaby(twinA.id)).breastFeed).toBeNull();
     expect((await getActiveTimersForBaby(twinB.id)).sleep?.id).toBe(sleepB.id);
   });
+
+  it('logs and toggles daily vitamins idempotently and soft-deletes all same-day vitamin events on No', async () => {
+    const { logVitamin, toggleVitaminForLocalDay } = await import('./store.js');
+    const baby = await createBaby({
+      name: 'Vit Baby',
+      dob: '2026-01-01',
+      createdByUserId: USER_ID,
+    });
+
+    const tz = 'America/New_York';
+    const dateKey = '2026-03-08'; // Spring-forward DST day
+    const nowMs = Date.parse('2026-03-10T15:00:00.000Z');
+
+    // Toggle Yes for historical DST day -> creates 1 event at local noon
+    await toggleVitaminForLocalDay({
+      babyId: baby.id,
+      dateKey,
+      timeZone: tz,
+      given: true,
+      userId: USER_ID,
+      userName: 'Parent',
+      nowMs,
+    });
+
+    let events = await listEventsForBaby(baby.id);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.type).toBe('vitamin');
+    expect(events[0]!.endedAt).toBe(events[0]!.startedAt);
+
+    // Calling toggle Yes again on same day is idempotent
+    await toggleVitaminForLocalDay({
+      babyId: baby.id,
+      dateKey,
+      timeZone: tz,
+      given: true,
+      userId: USER_ID,
+      nowMs,
+    });
+    events = await listEventsForBaby(baby.id);
+    expect(events).toHaveLength(1);
+
+    // Simulate second parent logging offline on same day
+    await logVitamin({
+      babyId: baby.id,
+      userId: USER_ID,
+      startedAt: '2026-03-08T18:00:00.000Z',
+    });
+    expect(await listEventsForBaby(baby.id)).toHaveLength(2);
+
+    // Toggle No -> soft-deletes BOTH same-day vitamin events
+    await toggleVitaminForLocalDay({
+      babyId: baby.id,
+      dateKey,
+      timeZone: tz,
+      given: false,
+      userId: USER_ID,
+      nowMs,
+    });
+    expect(await listEventsForBaby(baby.id)).toHaveLength(0);
+  });
 });

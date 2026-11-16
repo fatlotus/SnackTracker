@@ -12,6 +12,7 @@ import {
   Milk,
   Moon,
   Pencil,
+  Pill,
   Sparkles,
   Trash2,
   X,
@@ -25,7 +26,13 @@ import {
   type VolumeUnit,
 } from './uiUtils.js';
 
-type TimelineFilter = 'all' | 'feeds' | 'sleep' | 'diaper' | 'spit_up';
+type TimelineFilter =
+  | 'all'
+  | 'feeds'
+  | 'sleep'
+  | 'diaper'
+  | 'spit_up'
+  | 'vitamin';
 
 interface TimelineViewProps {
   events: TrackingEvent[];
@@ -82,7 +89,8 @@ export function TimelineView({
     }
     if (filter === 'sleep') return e.type === 'sleep';
     if (filter === 'diaper') return e.type === 'diaper';
-    return e.type === 'spit_up';
+    if (filter === 'spit_up') return e.type === 'spit_up';
+    return e.type === 'vitamin';
   });
 
   function renderSummary(event: TrackingEvent): {
@@ -176,6 +184,15 @@ export function TimelineView({
           cardClass: 'bt-card-spitup',
         };
       }
+      case 'vitamin': {
+        return {
+          title: t('timeline.vitaminTitle'),
+          detail: t('timeline.vitaminDetail'),
+          icon: <Pill className="h-4 w-4" />,
+          badgeClass: 'bt-badge-vitamin',
+          cardClass: 'bt-card-vitamin',
+        };
+      }
     }
   }
 
@@ -265,6 +282,7 @@ export function TimelineView({
             { id: 'sleep', label: t('timeline.filter.sleep') },
             { id: 'diaper', label: t('timeline.filter.diaper') },
             { id: 'spit_up', label: t('timeline.filter.spit_up') },
+            { id: 'vitamin', label: t('timeline.filter.vitamin') },
           ] as const
         ).map((tab) => (
           <button
@@ -334,14 +352,16 @@ export function TimelineView({
                 </div>
 
                 <div className="flex shrink-0 items-center gap-1">
-                  <button
-                    type="button"
-                    aria-label={t('timeline.editAria', { title: info.title })}
-                    onClick={() => onEditEvent(event)}
-                    className="bt-focus-ring inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </button>
+                  {event.type !== 'vitamin' && (
+                    <button
+                      type="button"
+                      aria-label={t('timeline.editAria', { title: info.title })}
+                      onClick={() => onEditEvent(event)}
+                      className="bt-focus-ring inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                  )}
                   <button
                     type="button"
                     aria-label={t('timeline.deleteAria', { title: info.title })}

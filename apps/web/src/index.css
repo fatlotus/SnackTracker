@@ -23,6 +23,8 @@
   --accent-diaper-soft: #fffbeb;
   --accent-spitup: #e11d48;
   --accent-spitup-soft: #fff1f2;
+  --accent-vitamin: #059669;
+  --accent-vitamin-soft: #ecfdf5;
 }
 
 .dark {
@@ -41,6 +43,8 @@
   --accent-diaper-soft: rgba(217, 119, 6, 0.16);
   --accent-spitup: #fb7185;
   --accent-spitup-soft: rgba(225, 29, 72, 0.16);
+  --accent-vitamin: #34d399;
+  --accent-vitamin-soft: rgba(16, 185, 129, 0.16);
 }
 
 @layer base {
@@ -86,6 +90,10 @@
   border-top: 3px solid var(--accent-spitup);
 }
 
+.bt-card-vitamin {
+  border-top: 3px solid var(--accent-vitamin);
+}
+
 .bt-badge-breast {
   background-color: var(--accent-breast-soft);
   color: var(--accent-breast);
@@ -109,6 +117,11 @@
 .bt-badge-spitup {
   background-color: var(--accent-spitup-soft);
   color: var(--accent-spitup);
+}
+
+.bt-badge-vitamin {
+  background-color: var(--accent-vitamin-soft);
+  color: var(--accent-vitamin);
 }
 
 .bt-focus-ring {

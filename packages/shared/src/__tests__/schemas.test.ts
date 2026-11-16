@@ -241,6 +241,26 @@ describe('TrackingEventSchema', () => {
     });
     expect(res.success).toBe(false);
   });
+
+  it('validates vitamin point-in-time event and rejects endedAt < startedAt', () => {
+    const valid = TrackingEventSchema.safeParse({
+      ...base,
+      type: 'vitamin',
+      startedAt: TS_1,
+      endedAt: TS_1,
+      payload: {},
+    });
+    expect(valid.success).toBe(true);
+
+    const invalid = TrackingEventSchema.safeParse({
+      ...base,
+      type: 'vitamin',
+      startedAt: TS_2,
+      endedAt: TS_1,
+      payload: {},
+    });
+    expect(invalid.success).toBe(false);
+  });
 });
 
 describe('sync & healthz schemas', () => {

@@ -390,4 +390,61 @@ describe('range stats, period averages, last activity, and day events', () => {
     expect(emptyAvg.averagesPerDay.totalSleepSeconds).toBe(0);
     expect(emptyAvg.averagesPerDay.bottleTotalMl).toBe(0);
   });
+
+  it('aggregates vitamin events, concurrent offline logs, soft-deletes, DST boundaries, and period averages', () => {
+    const vit1: TrackingEvent = {
+      ...makeBase('2026-03-08T13:00:00.000Z', '2026-03-08T13:00:00.000Z'),
+      type: 'vitamin',
+      payload: {},
+    };
+    const vit2Concurrent: TrackingEvent = {
+      ...makeBase('2026-03-08T14:30:00.000Z', '2026-03-08T14:30:00.000Z'),
+      type: 'vitamin',
+      payload: {},
+    };
+    const vitDeleted: TrackingEvent = {
+      ...makeBase('2026-03-09T13:00:00.000Z', '2026-03-09T13:00:00.000Z'),
+      deletedAt: '2026-03-09T13:05:00.000Z',
+      type: 'vitamin',
+      payload: {},
+    };
+    const vitFallBack: TrackingEvent = {
+      ...makeBase('2026-11-01T16:00:00.000Z', '2026-11-01T16:00:00.000Z'),
+      type: 'vitamin',
+      payload: {},
+    };
+
+    const nyTz = 'America/New_York';
+    // 0 events
+    const emptyStats = computeDailyStats([], '2026-03-07', nyTz);
+    expect(emptyStats.vitaminCount).toBe(0);
+    expect(emptyStats.vitaminGiven).toBe(false);
+
+    // 2 concurrent events on spring-forward DST day (2026-03-08)
+    const dstSpringStats = computeDailyStats([vit1, vit2Concurrent], '2026-03-08', nyTz);
+    expect(dstSpringStats.vitaminCount).toBe(2);
+    expect(dstSpringStats.vitaminGiven).toBe(true);
+
+    // Soft-deleted event on 2026-03-09
+    const deletedStats = computeDailyStats([vitDeleted], '2026-03-09', nyTz);
+    expect(deletedStats.vitaminCount).toBe(0);
+    expect(deletedStats.vitaminGiven).toBe(false);
+
+    // Fall-back DST day (2026-11-01)
+    const dstFallStats = computeDailyStats([vitFallBack], '2026-11-01', nyTz);
+    expect(dstFallStats.vitaminCount).toBe(1);
+    expect(dstFallStats.vitaminGiven).toBe(true);
+
+    // Period averages counts days where vitaminGiven is true (2 days out of 3)
+    const avg = computePeriodAverages([emptyStats, dstSpringStats, dstFallStats]);
+    expect(avg.totals.vitaminDaysCount).toBe(2);
+
+    // LastActivitySummary picks up latest active vitamin
+    const summary = computeLastActivitySummary(
+      [vit1, vit2Concurrent, vitDeleted],
+      Date.parse('2026-03-08T15:00:00.000Z'),
+    );
+    expect(summary.lastVitamin?.event.id).toBe(vit2Concurrent.id);
+    expect(summary.lastVitamin?.secondsSinceStart).toBe(1800);
+  });
 });

@@ -8,6 +8,7 @@ import {
   Milk,
   Moon,
   Pause,
+  Pill,
   Play,
   Plus,
   Sparkles,
@@ -18,6 +19,7 @@ import {
 import {
   computeDailyStats,
   computeLastActivitySummary,
+  toLocalDateKey,
   type DiaperKind,
   type TrackingEvent,
 } from '@baby-tracker/shared';
@@ -33,6 +35,7 @@ import {
   startBreastFeed,
   startSleep,
   switchBreastSide,
+  toggleVitaminForLocalDay,
   type ActiveTimersForBaby,
 } from '../lib/store.js';
 import type { BottleFeedEvent, DiaperEvent } from '@baby-tracker/shared';
@@ -78,11 +81,25 @@ export function DashboardView({
   onDiaperQuickLogged,
   onViewTimeline,
 }: DashboardViewProps) {
-  const { t, formatDurationShort, formatTimeAgo, formatVolume } = useI18n();
+  const {
+    t,
+    formatDurationShort,
+    formatLocalTime,
+    formatTimeAgo,
+    formatVolume,
+  } = useI18n();
   const timeZone = getLocalTimeZone();
   const todayKey = getTodayDateKey(timeZone, nowMs);
   const dailyStats = computeDailyStats(events, todayKey, timeZone, nowMs);
   const lastActivity = computeLastActivitySummary(events, nowMs);
+
+  const todayVitaminEvent =
+    lastActivity.lastVitamin &&
+    toLocalDateKey(Date.parse(lastActivity.lastVitamin.startedAt), timeZone) ===
+      todayKey
+      ? lastActivity.lastVitamin
+      : null;
+  const vitaminGivenToday = dailyStats.vitaminGiven;
 
   const lastSide = lastActivity.lastBreastFeed?.lastSide ?? null;
   const activeBreast = timers.breastFeed;
@@ -117,6 +134,20 @@ export function DashboardView({
       });
       onDiaperQuickLogged(created);
     });
+  }
+
+  async function handleToggleVitamin(given: boolean) {
+    await runAction(`vitamin:${given ? 'yes' : 'no'}`, () =>
+      toggleVitaminForLocalDay({
+        babyId,
+        dateKey: todayKey,
+        timeZone,
+        given,
+        userId,
+        userName,
+        nowMs,
+      }),
+    );
   }
 
   const breastmilkMl = dailyStats.bottleMlByMilkType.breastmilk ?? 0;
@@ -550,7 +581,7 @@ export function DashboardView({
         {/* 1-Tap Diaper Card */}
         <section
           aria-label={t('dashboard.diaperLog')}
-          className="bt-card bt-card-diaper p-4 md:col-span-1 xl:col-span-2"
+          className="bt-card bt-card-diaper p-4"
         >
           <div className="mb-3 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
@@ -646,6 +677,64 @@ export function DashboardView({
           >
             {t('dashboard.logSpitUp')}
           </button>
+        </section>
+
+        {/* Daily Vitamins Card */}
+        <section
+          aria-label={t('dashboard.vitamins')}
+          className="bt-card bt-card-vitamin p-4"
+        >
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <span className="bt-badge-vitamin inline-flex h-9 w-9 items-center justify-center rounded-xl">
+                <Pill className="h-5 w-5" />
+              </span>
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  {t('dashboard.vitamins')}
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  {vitaminGivenToday && todayVitaminEvent
+                    ? t('dashboard.vitaminsGivenToday', {
+                        time: formatLocalTime(
+                          todayVitaminEvent.startedAt,
+                          timeZone,
+                        ),
+                      })
+                    : t('dashboard.vitaminsNotGivenToday')}
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2.5">
+            <button
+              type="button"
+              aria-pressed={vitaminGivenToday}
+              disabled={busyAction !== null}
+              onClick={() => void handleToggleVitamin(true)}
+              className={`bt-focus-ring inline-flex min-h-[48px] items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-sm font-semibold transition disabled:opacity-60 ${
+                vitaminGivenToday
+                  ? 'border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200 dark:hover:bg-emerald-900/60'
+              }`}
+            >
+              {vitaminGivenToday && <Check className="h-4 w-4" />}
+              <span>{t('dashboard.vitaminsYes')}</span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={!vitaminGivenToday}
+              disabled={busyAction !== null}
+              onClick={() => void handleToggleVitamin(false)}
+              className={`bt-focus-ring inline-flex min-h-[48px] items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-sm font-semibold transition disabled:opacity-60 ${
+                !vitaminGivenToday
+                  ? 'border-slate-800 bg-slate-800 text-white hover:bg-slate-700 dark:border-slate-200 dark:bg-slate-200 dark:text-slate-900 dark:hover:bg-slate-300'
+                  : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300 dark:hover:bg-slate-800'
+              }`}
+            >
+              <span>{t('dashboard.vitaminsNo')}</span>
+            </button>
+          </div>
         </section>
       </section>
 

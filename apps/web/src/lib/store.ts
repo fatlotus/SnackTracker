@@ -1,5 +1,7 @@
 import {
   BabySchema,
+  localDayBounds,
+  toLocalDateKey,
   TrackingEventSchema,
   type Baby,
   type BabyMember,
@@ -20,6 +22,7 @@ import {
   type SpitUpSeverity,
   type TrackingEvent,
   type UpdateBabyInput,
+  type VitaminEvent,
 } from '@baby-tracker/shared';
 import { getDb, nowIso, uuidv4, type OutboxItem } from './db.js';
 
@@ -982,4 +985,74 @@ export async function logSpitUp(input: {
   };
 
   return (await putEventAtomic(event, 'upsert')) as SpitUpEvent;
+}
+
+export async function logVitamin(input: {
+  babyId: string;
+  userId: string;
+  userName?: string | null;
+  startedAt?: string;
+  notes?: string | null;
+}): Promise<VitaminEvent> {
+  const startedAt = input.startedAt ?? nowIso();
+  const now = nowIso();
+
+  const event: VitaminEvent = {
+    id: uuidv4(),
+    babyId: input.babyId,
+    type: 'vitamin',
+    startedAt,
+    endedAt: startedAt,
+    notes: input.notes ?? null,
+    loggedByUserId: input.userId,
+    loggedByName: input.userName ?? null,
+    updatedByUserId: input.userId,
+    createdAt: now,
+    updatedAt: now,
+    deletedAt: null,
+    serverSeq: 0,
+    payload: {},
+  };
+
+  return (await putEventAtomic(event, 'upsert')) as VitaminEvent;
+}
+
+export async function toggleVitaminForLocalDay(input: {
+  babyId: string;
+  dateKey: string;
+  timeZone: string;
+  given: boolean;
+  userId: string;
+  userName?: string | null;
+  nowMs?: number;
+}): Promise<void> {
+  const events = await listEventsForBaby(input.babyId);
+  const matching = events.filter(
+    (e) =>
+      e.type === 'vitamin' &&
+      e.deletedAt == null &&
+      toLocalDateKey(Date.parse(e.startedAt), input.timeZone) === input.dateKey,
+  );
+
+  if (input.given) {
+    if (matching.length > 0) return;
+    const todayKey = toLocalDateKey(input.nowMs ?? Date.now(), input.timeZone);
+    const startedAt =
+      input.dateKey === todayKey
+        ? nowIso()
+        : new Date(
+            localDayBounds(input.dateKey, input.timeZone).startMs +
+              12 * 3600 * 1000,
+          ).toISOString();
+    await logVitamin({
+      babyId: input.babyId,
+      userId: input.userId,
+      userName: input.userName,
+      startedAt,
+    });
+  } else {
+    for (const ev of matching) {
+      await deleteEvent(ev.id, input.userId);
+    }
+  }
 }
