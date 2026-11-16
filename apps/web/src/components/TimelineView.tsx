@@ -63,7 +63,18 @@ export function TimelineView({
     }
   }
 
-  const dayEvents = getEventsForLocalDay(events, selectedDateKey, timeZone, nowMs);
+  const dayEvents = getEventsForLocalDay(
+    events,
+    selectedDateKey,
+    timeZone,
+    nowMs,
+  )
+    .slice()
+    .sort(
+      (a, b) =>
+        Date.parse(b.startedAt) - Date.parse(a.startedAt) ||
+        Date.parse(b.createdAt) - Date.parse(a.createdAt),
+    );
   const filtered = dayEvents.filter((e) => {
     if (filter === 'all') return true;
     if (filter === 'feeds') {

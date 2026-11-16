@@ -897,13 +897,13 @@ test.describe('F6: Spit-Up Tracking — Tier 2 Boundary & Corner Cases', () => {
     await expect(earlierEl).toBeVisible();
     await expect(currentEl).toBeVisible();
 
-    // Verify chronological ordering in the timeline (oldest to newest: Earlier spit-up appears before Current event)
+    // Verify reverse-chronological ordering in the timeline (newest to oldest: Current event appears before Earlier spit-up)
     const timelineText = await main.innerText();
     const currentIdx = timelineText.indexOf('Current event');
     const earlierIdx = timelineText.indexOf('Earlier spit-up');
     expect(currentIdx).toBeGreaterThan(-1);
     expect(earlierIdx).toBeGreaterThan(-1);
-    expect(earlierIdx).toBeLessThan(currentIdx);
+    expect(currentIdx).toBeLessThan(earlierIdx);
   });
 
   test('logs multiple spit-up events within the same minute distinctly', async ({
