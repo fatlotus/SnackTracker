@@ -1,0 +1,218 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build via Cloud Build & Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies & run checks
+        env:
+          STORAGE_BACKEND: sqlite
+        run: |
+          npm ci
+          npm run build
+          npm run typecheck
+          npm test
+
+      - name: Trigger Cloud Build and deploy to Cloud Run
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          node --input-type=module << 'EOF'
+          import crypto from 'node:crypto';
+          import fs from 'node:fs';
+          import { execSync } from 'node:child_process';
+
+          const key = JSON.parse(process.env.GCP_SA_KEY);
+          const PROJECT_ID = key.project_id;
+          const REGION = 'us-central1';
+          const BUCKET_NAME = `${PROJECT_ID}-cloudbuild-src`;
+          const AR_REPO = 'snack-tracker';
+          const SERVICE_NAME = 'baby-tracker';
+          const SHORT_SHA = (process.env.COMMIT_SHA || 'latest').slice(0, 7);
+          const IMAGE_SHA = `${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${SERVICE_NAME}:${SHORT_SHA}`;
+          const IMAGE_LATEST = `${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${SERVICE_NAME}:latest`;
+
+          function base64url(input) {
+            return Buffer.from(input)
+              .toString('base64')
+              .replace(/=/g, '')
+              .replace(/\+/g, '-')
+              .replace(/\//g, '_');
+          }
+
+          async function getAccessToken() {
+            const now = Math.floor(Date.now() / 1000);
+            const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+            const payload = base64url(
+              JSON.stringify({
+                iss: key.client_email,
+                scope: 'https://www.googleapis.com/auth/cloud-platform',
+                aud: 'https://oauth2.googleapis.com/token',
+                exp: now + 3600,
+                iat: now,
+              }),
+            );
+            const unsigned = `${header}.${payload}`;
+            const sign = crypto.createSign('RSA-SHA256');
+            sign.update(unsigned);
+            const signature = sign
+              .sign(key.private_key, 'base64')
+              .replace(/=/g, '')
+              .replace(/\+/g, '-')
+              .replace(/\//g, '_');
+            const res = await fetch('https://oauth2.googleapis.com/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({
+                grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+                assertion: `${unsigned}.${signature}`,
+              }),
+            });
+            if (!res.ok) throw new Error(`Token error ${res.status}: ${await res.text()}`);
+            return (await res.json()).access_token;
+          }
+
+          async function api(token, method, url, body) {
+            const res = await fetch(url, {
+              method,
+              headers: {
+                Authorization: `Bearer ${token}`,
+                ...(body ? { 'Content-Type': 'application/json' } : {}),
+              },
+              body: body ? JSON.stringify(body) : undefined,
+            });
+            const text = await res.text();
+            let json;
+            try {
+              json = JSON.parse(text);
+            } catch {
+              json = text;
+            }
+            return { ok: res.ok, status: res.status, data: json };
+          }
+
+          async function pollOperation(token, opUrl) {
+            while (true) {
+              const r = await api(token, 'GET', opUrl);
+              if (!r.ok) throw new Error(`Poll error ${r.status}: ${JSON.stringify(r.data)}`);
+              if (r.data.done) {
+                if (r.data.error) throw new Error(`Operation failed: ${JSON.stringify(r.data.error)}`);
+                return r.data;
+              }
+              await new Promise((res) => setTimeout(res, 5000));
+            }
+          }
+
+          const token = await getAccessToken();
+          const tarballPath = '/tmp/snack-tracker-src.tar.gz';
+          const objectName = `source-${SHORT_SHA}-${Date.now()}.tar.gz`;
+          console.log(`1. Archiving ${SHORT_SHA} and uploading to gs://${BUCKET_NAME}/${objectName}`);
+          execSync(`git archive --format=tar.gz -o ${tarballPath} HEAD`);
+          const tarballBuf = fs.readFileSync(tarballPath);
+          const uploadRes = await fetch(
+            `https://storage.googleapis.com/upload/storage/v1/b/${BUCKET_NAME}/o?uploadType=media&name=${encodeURIComponent(objectName)}`,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/gzip',
+              },
+              body: tarballBuf,
+            },
+          );
+          if (!uploadRes.ok) throw new Error(`Upload failed ${uploadRes.status}: ${await uploadRes.text()}`);
+
+          console.log(`2. Starting Cloud Build for ${IMAGE_SHA}`);
+          let r = await api(token, 'POST', `https://cloudbuild.googleapis.com/v1/projects/${PROJECT_ID}/builds`, {
+            source: {
+              storageSource: {
+                bucket: BUCKET_NAME,
+                object: objectName,
+              },
+            },
+            steps: [
+              {
+                name: 'gcr.io/cloud-builders/docker',
+                args: ['build', '-t', IMAGE_SHA, '-t', IMAGE_LATEST, '.'],
+              },
+            ],
+            images: [IMAGE_SHA, IMAGE_LATEST],
+          });
+          if (!r.ok) throw new Error(`Cloud Build start failed ${r.status}: ${JSON.stringify(r.data)}`);
+          console.log('   Build started:', r.data.metadata?.build?.id);
+          const buildResult = await pollOperation(token, `https://cloudbuild.googleapis.com/v1/${r.data.name}`);
+          console.log('   Cloud Build finished! Status:', buildResult.response?.status);
+
+          console.log(`3. Updating Cloud Run service ${SERVICE_NAME}`);
+          const serviceUrl = `https://run.googleapis.com/v2/projects/${PROJECT_ID}/locations/${REGION}/services/${SERVICE_NAME}`;
+          const existingService = await api(token, 'GET', serviceUrl);
+          const existingEnv = existingService.data?.template?.containers?.[0]?.env ?? [];
+          const existingSecret =
+            existingEnv.find((e) => e.name === 'SESSION_SECRET')?.value ||
+            crypto.randomBytes(32).toString('hex');
+
+          const serviceBody = {
+            ingress: 'INGRESS_TRAFFIC_ALL',
+            template: {
+              scaling: {
+                minInstanceCount: 0,
+                maxInstanceCount: 10,
+              },
+              containers: [
+                {
+                  image: IMAGE_SHA,
+                  ports: [{ name: 'http1', containerPort: 8080 }],
+                  env: [
+                    { name: 'NODE_ENV', value: 'production' },
+                    { name: 'STORAGE_BACKEND', value: 'firestore' },
+                    { name: 'FIRESTORE_PROJECT_ID', value: PROJECT_ID },
+                    { name: 'SESSION_SECRET', value: existingSecret },
+                  ],
+                  resources: {
+                    limits: { cpu: '1', memory: '512Mi' },
+                    cpuIdle: true,
+                  },
+                  startupProbe: {
+                    httpGet: { path: '/healthz', port: 8080 },
+                    initialDelaySeconds: 2,
+                    periodSeconds: 5,
+                    timeoutSeconds: 3,
+                    failureThreshold: 6,
+                  },
+                  livenessProbe: {
+                    httpGet: { path: '/healthz', port: 8080 },
+                    periodSeconds: 30,
+                    timeoutSeconds: 3,
+                    failureThreshold: 3,
+                  },
+                },
+              ],
+            },
+          };
+
+          r = await api(token, 'PATCH', serviceUrl, serviceBody);
+          if (!r.ok) throw new Error(`Cloud Run deploy failed ${r.status}: ${JSON.stringify(r.data)}`);
+          const runOp = await pollOperation(token, `https://run.googleapis.com/v2/${r.data.name}`);
+          console.log('   Deployed revision:', runOp.response?.latestReadyRevision, 'URL:', runOp.response?.uri);
+          EOF
