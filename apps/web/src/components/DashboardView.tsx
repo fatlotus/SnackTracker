@@ -101,7 +101,8 @@ export function DashboardView({
       : null;
   const vitaminGivenToday = dailyStats.vitaminGiven;
 
-  const lastSide = lastActivity.lastBreastFeed?.lastSide ?? null;
+  const lastBreast = lastActivity.lastBreastFeed;
+  const lastSide = lastBreast?.lastSide ?? null;
   const activeBreast = timers.breastFeed;
   const activeBottle = timers.bottleFeed;
   const activeSleep = timers.sleep;
@@ -189,14 +190,27 @@ export function DashboardView({
                   {t('dashboard.breastfeeding')}
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  {lastSide
-                    ? t('dashboard.lastSide', {
-                        side:
-                          lastSide === 'left'
-                            ? t('common.left')
-                            : t('common.right'),
-                      })
-                    : t('dashboard.noSideYet')}
+                  {!lastBreast
+                    ? t('dashboard.noSideYet')
+                    : lastBreast.isOngoing
+                      ? t('dashboard.feedingNow')
+                      : lastSide
+                        ? t('dashboard.lastBreastFeed', {
+                            side:
+                              lastSide === 'left'
+                                ? t('common.left')
+                                : t('common.right'),
+                            duration: formatDurationShort(
+                              lastBreast.durationSeconds,
+                            ),
+                            ago: formatTimeAgo(lastBreast.secondsSinceEnd),
+                          })
+                        : t('dashboard.lastBreastFeedNoSide', {
+                            duration: formatDurationShort(
+                              lastBreast.durationSeconds,
+                            ),
+                            ago: formatTimeAgo(lastBreast.secondsSinceEnd),
+                          })}
                 </p>
               </div>
             </div>

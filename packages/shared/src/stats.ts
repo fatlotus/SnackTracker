@@ -640,6 +640,7 @@ export interface LastTimedActivity<T extends TrackingEvent = TrackingEvent> {
 
 export interface LastBreastFeedSummary extends LastTimedActivity<BreastFeedEvent> {
   lastSide: BreastSide | null;
+  durationSeconds: number;
 }
 
 export interface LastBottleFeedSummary extends LastTimedActivity<BottleFeedEvent> {
@@ -711,6 +712,24 @@ function getLastSideFromBreastEvent(event: BreastFeedEvent): BreastSide | null {
   return null;
 }
 
+function getDurationSecondsFromBreastEvent(event: BreastFeedEvent): number {
+  const { segments, totalLeftSeconds, totalRightSeconds } = event.payload;
+  const total = Math.max(0, totalLeftSeconds + totalRightSeconds);
+  if (total > 0 || segments.length === 0) {
+    return total;
+  }
+  let closedSum = 0;
+  for (const seg of segments) {
+    if (seg.endedAt !== null) {
+      closedSum += Math.max(
+        0,
+        (Date.parse(seg.endedAt) - Date.parse(seg.startedAt)) / 1000,
+      );
+    }
+  }
+  return closedSum;
+}
+
 /**
  * Computes the most recent activity per category (ignoring soft-deleted events).
  */
@@ -738,6 +757,7 @@ export function computeLastActivitySummary(
         lastBreastFeed = {
           ...buildTimedActivity(event, nowMs),
           lastSide: getLastSideFromBreastEvent(event),
+          durationSeconds: getDurationSecondsFromBreastEvent(event),
         };
       }
       if (!lastFeed) {

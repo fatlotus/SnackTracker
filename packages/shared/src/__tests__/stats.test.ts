@@ -447,4 +447,105 @@ describe('range stats, period averages, last activity, and day events', () => {
     expect(summary.lastVitamin?.event.id).toBe(vit2Concurrent.id);
     expect(summary.lastVitamin?.secondsSinceStart).toBe(1800);
   });
+
+  it('computes lastBreastFeed summary for null, ongoing, completed, segment fallback, and missing-side cases', () => {
+    const nowMs = Date.parse('2026-06-15T14:30:00.000Z');
+
+    // 1. No breast_feed events -> null
+    expect(computeLastActivitySummary([], nowMs).lastBreastFeed).toBeNull();
+
+    // 2. Ongoing breast_feed -> isOngoing: true, secondsSinceEnd: 0
+    const ongoingBf: TrackingEvent = {
+      ...makeBase('2026-06-15T14:20:00.000Z', null),
+      type: 'breast_feed',
+      payload: {
+        segments: [
+          {
+            side: 'left',
+            startedAt: '2026-06-15T14:20:00.000Z',
+            endedAt: '2026-06-15T14:25:00.000Z',
+          },
+          {
+            side: 'right',
+            startedAt: '2026-06-15T14:25:00.000Z',
+            endedAt: null,
+          },
+        ],
+        pausedAt: null,
+        totalLeftSeconds: 300,
+        totalRightSeconds: 0,
+      },
+    };
+    const ongoingSummary = computeLastActivitySummary([ongoingBf], nowMs);
+    expect(ongoingSummary.lastBreastFeed?.isOngoing).toBe(true);
+    expect(ongoingSummary.lastBreastFeed?.secondsSinceEnd).toBe(0);
+    expect(ongoingSummary.lastBreastFeed?.lastSide).toBe('right');
+    expect(ongoingSummary.lastBreastFeed?.durationSeconds).toBe(300);
+
+    // 3. Completed breast_feed with totals -> side + durationSeconds + secondsSinceEnd
+    const completedBf: TrackingEvent = {
+      ...makeBase('2026-06-15T12:00:00.000Z', '2026-06-15T12:15:00.000Z'),
+      type: 'breast_feed',
+      payload: {
+        segments: [
+          {
+            side: 'left',
+            startedAt: '2026-06-15T12:00:00.000Z',
+            endedAt: '2026-06-15T12:08:00.000Z',
+          },
+          {
+            side: 'right',
+            startedAt: '2026-06-15T12:08:00.000Z',
+            endedAt: '2026-06-15T12:15:00.000Z',
+          },
+        ],
+        pausedAt: null,
+        totalLeftSeconds: 480,
+        totalRightSeconds: 420,
+      },
+    };
+    const completedSummary = computeLastActivitySummary([completedBf], nowMs);
+    expect(completedSummary.lastBreastFeed?.isOngoing).toBe(false);
+    expect(completedSummary.lastBreastFeed?.lastSide).toBe('right');
+    expect(completedSummary.lastBreastFeed?.durationSeconds).toBe(900);
+    expect(completedSummary.lastBreastFeed?.secondsSinceEnd).toBe(2 * 3600 + 15 * 60);
+
+    // 4. Completed breast_feed with zero totals -> falls back to closed segment sum
+    const segmentFallbackBf: TrackingEvent = {
+      ...makeBase('2026-06-15T13:00:00.000Z', '2026-06-15T13:10:00.000Z'),
+      type: 'breast_feed',
+      payload: {
+        segments: [
+          {
+            side: 'left',
+            startedAt: '2026-06-15T13:00:00.000Z',
+            endedAt: '2026-06-15T13:10:00.000Z',
+          },
+        ],
+        pausedAt: null,
+        totalLeftSeconds: 0,
+        totalRightSeconds: 0,
+      },
+    };
+    const fallbackSummary = computeLastActivitySummary([segmentFallbackBf], nowMs);
+    expect(fallbackSummary.lastBreastFeed?.lastSide).toBe('left');
+    expect(fallbackSummary.lastBreastFeed?.durationSeconds).toBe(600);
+    expect(fallbackSummary.lastBreastFeed?.secondsSinceEnd).toBe(80 * 60);
+
+    // 5. Missing-side fallback -> lastSide: null, durationSeconds from totals
+    const missingSideBf: TrackingEvent = {
+      ...makeBase('2026-06-15T14:00:00.000Z', '2026-06-15T14:10:00.000Z'),
+      type: 'breast_feed',
+      payload: {
+        segments: [],
+        pausedAt: null,
+        totalLeftSeconds: 300,
+        totalRightSeconds: 300,
+      },
+    };
+    const missingSideSummary = computeLastActivitySummary([missingSideBf], nowMs);
+    expect(missingSideSummary.lastBreastFeed?.lastSide).toBeNull();
+    expect(missingSideSummary.lastBreastFeed?.durationSeconds).toBe(600);
+    expect(missingSideSummary.lastBreastFeed?.secondsSinceEnd).toBe(20 * 60);
+  });
 });

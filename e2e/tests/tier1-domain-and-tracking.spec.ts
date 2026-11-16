@@ -654,13 +654,15 @@ test.describe('F2: Breastfeeding Tracking (Tier 1)', () => {
   }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
+    const breastCard = page.getByRole('region', { name: /Breastfeeding/i });
     await page.getByRole('button', { name: /^Start Right$/i }).first().click();
+    await expect(breastCard.getByText(/^Feeding now$/i)).toBeVisible();
     await page.waitForTimeout(1000);
     await page.getByRole('button', { name: /^Finish$/i }).first().click();
 
-    // Check breastfeeding widget for last-side indicator
+    // Check breastfeeding widget for last-side, duration, and time-ago indicator
     await expect(
-      page.getByText(/last:\s*right|last.*right|last side.*R/i).first(),
+      breastCard.getByText(/Last:\s*Right\s*·\s*(<1m|\d+m)\s*\(just now\)/i).first(),
     ).toBeVisible();
   });
 });
