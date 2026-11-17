@@ -414,12 +414,15 @@ test.describe('Tier 3: Cross-Feature Pairwise Combinations', () => {
 
     await goOffline(context);
 
-    // Start sleep timer and log wet diaper while offline
+    // Start sleep timer and log wet diaper while offline -> wet diaper auto-ends sleep
     await page.getByRole('button', { name: /start nap/i }).first().click();
-    await page.getByRole('button', { name: /^wet$/i }).first().click();
     await expect(
       page.getByRole('button', { name: /^Wake Up$/i }).first(),
     ).toBeVisible({ timeout: 5_000 });
+    await page.getByRole('button', { name: /^wet$/i }).first().click();
+    await expect(
+      page.getByRole('button', { name: /^Wake Up$/i }),
+    ).toHaveCount(0, { timeout: 5_000 });
     await expect(page.getByText(/1W|wet/i).first()).toBeVisible({
       timeout: 5_000,
     });
@@ -427,7 +430,7 @@ test.describe('Tier 3: Cross-Feature Pairwise Combinations', () => {
     await page.reload();
 
     await expect(page.getByLabel('Select active baby').first()).toContainText('MobileOfflineBaby');
-    await expect(page.getByRole('button', { name: /^Wake Up$/i }).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Wake Up$/i })).toHaveCount(0);
     await expect(page.getByText(/wet/i).first()).toBeVisible();
 
     await goOnline(context);

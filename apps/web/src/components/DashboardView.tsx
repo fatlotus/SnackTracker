@@ -471,7 +471,7 @@ export function DashboardView({
           )}
         </section>
 
-        {/* Sleep Card (Concurrent with Feeds!) */}
+        {/* Sleep Card (auto-ended when a new feed or diaper is logged) */}
         <section
           aria-label={t('dashboard.sleep')}
           className="bt-card bt-card-sleep p-4"

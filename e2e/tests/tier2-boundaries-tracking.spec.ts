@@ -579,7 +579,7 @@ test.describe('F3: Bottle Feeding Tracking — Tier 2 Boundary & Corner Cases', 
     ).toBeVisible();
   });
 
-  test('logs bottle feed concurrently while a sleep timer is active', async ({
+  test('automatically ends active sleep when a bottle feed is logged', async ({
     page,
   }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
@@ -595,14 +595,17 @@ test.describe('F3: Bottle Feeding Tracking — Tier 2 Boundary & Corner Cases', 
       .or(page.getByPlaceholder(/ml|volume/i))
       .first()
       .fill('85');
+    const afterSleep = new Date(Date.now() + 60_000);
+    await fillTimeOrDateTime(page.locator('#bottle-start'), afterSleep);
+    await fillTimeOrDateTime(page.locator('#bottle-end'), afterSleep);
     await page.getByRole('button', { name: /save bottle/i }).click();
 
     await expect(
       page.getByRole('main').getByText(/85\s*ml/i).first(),
     ).toBeVisible();
     await expect(
-      page.getByRole('button', { name: /^Wake Up$/i }).first(),
-    ).toBeVisible();
+      page.getByRole('button', { name: /^Wake Up$/i }),
+    ).toHaveCount(0);
   });
 });
 

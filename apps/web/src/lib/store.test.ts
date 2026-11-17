@@ -4,6 +4,7 @@ import { closeDb, DB_NAME, getDb } from './db.js';
 import {
   computeBreastFeedElapsed,
   createBaby,
+  createEvent,
   deleteBaby,
   deleteEvent,
   finishBottleFeed,
@@ -17,6 +18,7 @@ import {
   logDiaper,
   logSleep,
   logSpitUp,
+  logVitamin,
   pauseBreastFeed,
   resumeBreastFeed,
   startBottleFeed,
@@ -24,6 +26,7 @@ import {
   startSleep,
   subscribeStore,
   switchBreastSide,
+  toggleVitaminForLocalDay,
   updateBaby,
 } from './store.js';
 
@@ -358,5 +361,241 @@ describe('store (IndexedDB + atomic outbox + timers)', () => {
       nowMs,
     });
     expect(await listEventsForBaby(baby.id)).toHaveLength(0);
+  });
+
+  it('auto-ends active sleep on startBreastFeed, manual createEvent(breast_feed), startBottleFeed, logBottleFeed, and logDiaper with outbox upserts', async () => {
+    const baby = await createBaby({
+      name: 'Sleepy Baby',
+      dob: '2026-01-01',
+      createdByUserId: USER_ID,
+    });
+
+    const t0 = '2026-03-10T10:00:00.000Z';
+
+    // 1. startBreastFeed ends active sleep
+    const sleep1 = await startSleep({
+      babyId: baby.id,
+      category: 'nap',
+      userId: USER_ID,
+      startedAt: t0,
+    });
+    const t1 = '2026-03-10T10:30:00.000Z';
+    const bf1 = await startBreastFeed({
+      babyId: baby.id,
+      side: 'left',
+      userId: USER_ID,
+      startedAt: t1,
+    });
+    expect((await getActiveTimersForBaby(baby.id)).sleep).toBeNull();
+    let events = await listEventsForBaby(baby.id);
+    expect(events.find((e) => e.id === sleep1.id)?.endedAt).toBe(bf1.startedAt);
+    await finishBreastFeed({
+      babyId: baby.id,
+      userId: USER_ID,
+      at: '2026-03-10T10:40:00.000Z',
+    });
+
+    // Check outbox has an upsert for ended sleep1
+    const db = await getDb();
+    let outbox = await db.getAll('outbox');
+    const sleep1Upserts = outbox.filter(
+      (m) => m.entityId === sleep1.id && m.op === 'upsert',
+    );
+    expect(sleep1Upserts.length).toBeGreaterThanOrEqual(2);
+    expect(
+      sleep1Upserts.some(
+        (m) => (m.data as { endedAt: string | null }).endedAt === bf1.startedAt,
+      ),
+    ).toBe(true);
+
+    // 2. createEvent (manual breast_feed) ends active sleep
+    const sleep2 = await startSleep({
+      babyId: baby.id,
+      category: 'nap',
+      userId: USER_ID,
+      startedAt: '2026-03-10T11:00:00.000Z',
+    });
+    const manualBf = await createEvent({
+      id: crypto.randomUUID(),
+      babyId: baby.id,
+      type: 'breast_feed',
+      startedAt: '2026-03-10T11:45:00.000Z',
+      endedAt: '2026-03-10T12:00:00.000Z',
+      notes: null,
+      loggedByUserId: USER_ID,
+      loggedByName: null,
+      updatedByUserId: USER_ID,
+      createdAt: '2026-03-10T12:00:00.000Z',
+      updatedAt: '2026-03-10T12:00:00.000Z',
+      deletedAt: null,
+      serverSeq: 0,
+      payload: {
+        segments: [
+          {
+            side: 'right',
+            startedAt: '2026-03-10T11:45:00.000Z',
+            endedAt: '2026-03-10T12:00:00.000Z',
+          },
+        ],
+        pausedAt: null,
+        totalLeftSeconds: 0,
+        totalRightSeconds: 900,
+      },
+    });
+    expect((await getActiveTimersForBaby(baby.id)).sleep).toBeNull();
+    events = await listEventsForBaby(baby.id);
+    expect(events.find((e) => e.id === sleep2.id)?.endedAt).toBe(manualBf.startedAt);
+
+    // 3. startBottleFeed ends active sleep
+    const sleep3 = await startSleep({
+      babyId: baby.id,
+      category: 'nap',
+      userId: USER_ID,
+      startedAt: '2026-03-10T13:00:00.000Z',
+    });
+    const bottleStart = await startBottleFeed({
+      babyId: baby.id,
+      milkType: 'formula',
+      userId: USER_ID,
+      startedAt: '2026-03-10T13:20:00.000Z',
+    });
+    expect((await getActiveTimersForBaby(baby.id)).sleep).toBeNull();
+    events = await listEventsForBaby(baby.id);
+    expect(events.find((e) => e.id === sleep3.id)?.endedAt).toBe(
+      bottleStart.startedAt,
+    );
+    await finishBottleFeed({
+      babyId: baby.id,
+      userId: USER_ID,
+      volumeMl: 90,
+      at: '2026-03-10T13:30:00.000Z',
+    });
+
+    // 4. logBottleFeed ends active sleep
+    const sleep4 = await startSleep({
+      babyId: baby.id,
+      category: 'nap',
+      userId: USER_ID,
+      startedAt: '2026-03-10T14:00:00.000Z',
+    });
+    const manualBottle = await logBottleFeed({
+      babyId: baby.id,
+      milkType: 'breastmilk',
+      volumeMl: 100,
+      userId: USER_ID,
+      startedAt: '2026-03-10T14:25:00.000Z',
+      endedAt: '2026-03-10T14:35:00.000Z',
+    });
+    expect((await getActiveTimersForBaby(baby.id)).sleep).toBeNull();
+    events = await listEventsForBaby(baby.id);
+    expect(events.find((e) => e.id === sleep4.id)?.endedAt).toBe(
+      manualBottle.startedAt,
+    );
+
+    // 5. logDiaper ends active sleep
+    const sleep5 = await startSleep({
+      babyId: baby.id,
+      category: 'nap',
+      userId: USER_ID,
+      startedAt: '2026-03-10T15:00:00.000Z',
+    });
+    const diaper = await logDiaper({
+      babyId: baby.id,
+      kind: 'wet',
+      userId: USER_ID,
+      startedAt: '2026-03-10T15:15:00.000Z',
+    });
+    expect((await getActiveTimersForBaby(baby.id)).sleep).toBeNull();
+    events = await listEventsForBaby(baby.id);
+    expect(events.find((e) => e.id === sleep5.id)?.endedAt).toBe(diaper.startedAt);
+
+    outbox = await db.getAll('outbox');
+    const sleep5Upserts = outbox.filter(
+      (m) => m.entityId === sleep5.id && m.op === 'upsert',
+    );
+    expect(
+      sleep5Upserts.some(
+        (m) =>
+          (m.data as { endedAt: string | null }).endedAt === diaper.startedAt,
+      ),
+    ).toBe(true);
+  });
+
+  it('does NOT end active sleep on spit_up, vitamin, backdated events, or other twin events', async () => {
+    const twinA = await createBaby({
+      name: 'Twin A',
+      dob: '2026-01-01',
+      createdByUserId: USER_ID,
+    });
+    const twinB = await createBaby({
+      name: 'Twin B',
+      dob: '2026-01-01',
+      createdByUserId: USER_ID,
+    });
+
+    const sleepA = await startSleep({
+      babyId: twinA.id,
+      category: 'nap',
+      userId: USER_ID,
+      startedAt: '2026-03-10T12:00:00.000Z',
+    });
+    const sleepB = await startSleep({
+      babyId: twinB.id,
+      category: 'night',
+      userId: USER_ID,
+      startedAt: '2026-03-10T12:00:00.000Z',
+    });
+
+    // Spit up does NOT end active sleep
+    await logSpitUp({
+      babyId: twinA.id,
+      severity: 'small',
+      userId: USER_ID,
+      startedAt: '2026-03-10T12:10:00.000Z',
+    });
+    expect((await getActiveTimersForBaby(twinA.id)).sleep?.id).toBe(sleepA.id);
+
+    // Vitamin (direct logVitamin and toggleVitaminForLocalDay) does NOT end active sleep
+    await logVitamin({
+      babyId: twinA.id,
+      userId: USER_ID,
+      startedAt: '2026-03-10T12:15:00.000Z',
+    });
+    await toggleVitaminForLocalDay({
+      babyId: twinA.id,
+      dateKey: '2026-03-10',
+      timeZone: 'UTC',
+      given: true,
+      userId: USER_ID,
+      nowMs: Date.parse('2026-03-10T12:20:00.000Z'),
+    });
+    expect((await getActiveTimersForBaby(twinA.id)).sleep?.id).toBe(sleepA.id);
+
+    // Backdated manual feed/diaper (startedAt < sleepA.startedAt) does NOT end active sleep
+    await logDiaper({
+      babyId: twinA.id,
+      kind: 'poopy',
+      userId: USER_ID,
+      startedAt: '2026-03-10T11:30:00.000Z',
+    });
+    await logBottleFeed({
+      babyId: twinA.id,
+      milkType: 'formula',
+      volumeMl: 50,
+      userId: USER_ID,
+      startedAt: '2026-03-10T11:00:00.000Z',
+      endedAt: '2026-03-10T11:10:00.000Z',
+    });
+    expect((await getActiveTimersForBaby(twinA.id)).sleep?.id).toBe(sleepA.id);
+
+    // Logging a feed/diaper for Twin A ends Twin A's sleep, NOT Twin B's sleep
+    await logDiaper({
+      babyId: twinA.id,
+      kind: 'wet',
+      userId: USER_ID,
+      startedAt: '2026-03-10T12:30:00.000Z',
+    });
+    expect((await getActiveTimersForBaby(twinA.id)).sleep).toBeNull();
+    expect((await getActiveTimersForBaby(twinB.id)).sleep?.id).toBe(sleepB.id);
   });
 });

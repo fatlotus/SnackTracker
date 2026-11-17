@@ -185,6 +185,12 @@ export async function deleteBaby(babyId: string): Promise<Baby> {
 // Events (Atomic IDB + Outbox)
 // ============================================================================
 
+const AUTO_END_SLEEP_TYPES = new Set<TrackingEvent['type']>([
+  'breast_feed',
+  'bottle_feed',
+  'diaper',
+]);
+
 async function putEventAtomic(
   event: TrackingEvent,
   op: 'upsert' | 'delete' = 'upsert',
@@ -200,11 +206,47 @@ async function putEventAtomic(
 
   const db = await getDb();
   const tx = db.transaction(['events', 'outbox'], 'readwrite');
-  await Promise.all([
+  const writes: Promise<unknown>[] = [
     tx.objectStore('events').put(validated),
     tx.objectStore('outbox').put(outboxItem),
-    tx.done,
-  ]);
+  ];
+
+  if (op === 'upsert' && AUTO_END_SLEEP_TYPES.has(validated.type)) {
+    const babyEvents = await tx
+      .objectStore('events')
+      .index('by-babyId')
+      .getAll(validated.babyId);
+    const newStartMs = Date.parse(validated.startedAt);
+    for (const existing of babyEvents) {
+      if (
+        existing.type === 'sleep' &&
+        !existing.deletedAt &&
+        existing.endedAt === null &&
+        Date.parse(existing.startedAt) <= newStartMs
+      ) {
+        const endedSleep = TrackingEventSchema.parse({
+          ...existing,
+          endedAt: validated.startedAt,
+          updatedAt: validated.updatedAt,
+          updatedByUserId: validated.updatedByUserId,
+        });
+        const sleepOutbox = makeOutboxItem(
+          'event',
+          endedSleep.id,
+          'upsert',
+          endedSleep as unknown as Record<string, unknown>,
+          endedSleep.updatedAt,
+        );
+        writes.push(
+          tx.objectStore('events').put(endedSleep),
+          tx.objectStore('outbox').put(sleepOutbox),
+        );
+      }
+    }
+  }
+
+  writes.push(tx.done);
+  await Promise.all(writes);
 
   notifyStoreChange();
   return validated;

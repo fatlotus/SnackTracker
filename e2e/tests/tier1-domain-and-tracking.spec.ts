@@ -807,7 +807,7 @@ test.describe('F4: Sleep Tracking (Tier 1)', () => {
     await expect(main.getByText(/crib/i).first()).toBeVisible();
   });
 
-  test('supports logging a feed concurrently while a sleep timer is active', async ({
+  test('automatically ends active sleep when a feed is started', async ({
     page,
   }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
@@ -818,21 +818,39 @@ test.describe('F4: Sleep Tracking (Tier 1)', () => {
       page.getByRole('button', { name: /^Wake Up$/i }).first(),
     ).toBeVisible();
 
-    // Log a bottle feed while sleep is still active
-    await page.getByRole('button', { name: /log bottle/i }).first().click();
-    const volumeInput = page
-      .getByLabel(/volume|amount|ml/i)
-      .or(page.getByPlaceholder(/ml|volume/i));
-    await volumeInput.first().fill('60');
-    await page.getByRole('button', { name: /save bottle/i }).click();
-
-    // Bottle feed logged AND sleep timer still active
+    // Start a bottle feed while sleep is active -> auto-ends sleep
+    await page.getByRole('button', { name: /start bottle/i }).first().click();
     await expect(
-      page.getByRole('main').getByText(/60\s*ml/i).first(),
+      page.getByRole('button', { name: /^Wake Up$/i }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole('button', { name: /finish.*enter volume/i }).first(),
     ).toBeVisible();
+  });
+
+  test('keeps active sleep running on spit-up, then ends it on diaper', async ({
+    page,
+  }) => {
+    await setupAuthenticatedBaby(page, { babyName: 'Maya' });
+
+    // Start sleep timer
+    await page.getByRole('button', { name: /start nap/i }).first().click();
     await expect(
       page.getByRole('button', { name: /^Wake Up$/i }).first(),
     ).toBeVisible();
+
+    // Log spit-up -> sleep timer remains active
+    await page.getByRole('button', { name: /log spit.?up/i }).first().click();
+    await page.getByRole('button', { name: /save spit.?up/i }).click();
+    await expect(
+      page.getByRole('button', { name: /^Wake Up$/i }).first(),
+    ).toBeVisible();
+
+    // Log wet diaper -> sleep timer automatically ends
+    await page.getByRole('button', { name: /^wet$/i }).first().click();
+    await expect(
+      page.getByRole('button', { name: /^Wake Up$/i }),
+    ).toHaveCount(0);
   });
 
   test('displays total sleep duration in daily stats', async ({ page }) => {
