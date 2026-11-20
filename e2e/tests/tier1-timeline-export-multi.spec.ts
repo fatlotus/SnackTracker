@@ -176,6 +176,45 @@ test.describe('F7: Daily Timeline & Stats', () => {
     await expect(mainContent).toContainText(/last feed|since.*feed|just now|0\s*m|< ?1\s*m|ago/i);
   });
 
+  test('navigates Dashboard summary across days and shows matching day summary box on Timeline', async ({
+    page,
+  }) => {
+    await setupAuthenticatedBaby(page, { babyName: 'MultiDaySummaryBaby' });
+
+    await logBottleViaUI(page, 130);
+
+    const prevDayBtn = page.getByRole('button', { name: /previous day/i });
+    const nextDayBtn = page.getByRole('button', { name: /next day/i });
+
+    // On Today: Next day is disabled and today's 1 feed / 130 ml is shown
+    await expect(nextDayBtn).toBeDisabled();
+    await expect(page.getByRole('heading', { name: /today's summary/i })).toBeVisible();
+    await expect(page.getByRole('main')).toContainText(/1\s*feeds/i);
+    await expect(page.getByRole('main')).toContainText(/130\s*ml/i);
+
+    // Step to Yesterday: 0 feeds, Next day enabled, Live badge shown on Last Feed & Sleep
+    await prevDayBtn.click();
+    await expect(
+      page.getByRole('heading', { name: /yesterday's summary/i }),
+    ).toBeVisible();
+    await expect(nextDayBtn).toBeEnabled();
+    await expect(page.getByRole('main')).toContainText(/0\s*feeds/i);
+
+    // Open Timeline from Yesterday's summary -> lands on Yesterday with summary box
+    await page.getByRole('button', { name: /view full timeline/i }).click();
+    const timelineSummary = page.getByRole('region', {
+      name: /daily summary for/i,
+    });
+    await expect(timelineSummary).toBeVisible();
+    await expect(timelineSummary).toContainText(/0\s*feeds/i);
+
+    // Page forward to Today on Timeline -> summary box updates to 1 feed / 130 ml
+    await page.getByRole('button', { name: /next day/i }).click();
+    await expect(timelineSummary).toContainText(/1\s*feeds/i);
+    await expect(timelineSummary).toContainText(/130\s*ml/i);
+    await expectNoHorizontalOverflow(page);
+  });
+
   test('renders multi-day trends and switches between 7, 14, and 30 day windows', async ({
     page,
   }) => {
