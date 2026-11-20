@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   addDays,
+  computeDailyStats,
   getEventsForLocalDay,
   type TrackingEvent,
 } from '@baby-tracker/shared';
@@ -19,6 +20,11 @@ import {
 } from 'lucide-react';
 import { deleteEvent } from '../lib/store.js';
 import { useI18n } from '../lib/i18n.js';
+import {
+  ALL_SUMMARY_CATEGORIES,
+  DailySummaryCards,
+  type SummaryCardCategory,
+} from './DailySummaryCards.js';
 import {
   getLocalTimeZone,
   getTodayDateKey,
@@ -39,6 +45,7 @@ interface TimelineViewProps {
   userId: string;
   volumeUnit: VolumeUnit;
   nowMs: number;
+  initialDateKey?: string | null;
   onEditEvent: (event: TrackingEvent) => void;
 }
 
@@ -47,6 +54,7 @@ export function TimelineView({
   userId,
   volumeUnit,
   nowMs,
+  initialDateKey = null,
   onEditEvent,
 }: TimelineViewProps) {
   const { t, locale, formatDurationShort, formatLocalTime, formatVolume } =
@@ -55,7 +63,15 @@ export function TimelineView({
   const todayKey = getTodayDateKey(timeZone, nowMs);
   const yesterdayKey = getYesterdayDateKey(timeZone, nowMs);
 
-  const [selectedDateKey, setSelectedDateKey] = useState(todayKey);
+  const [selectedDateOverride, setSelectedDateOverride] = useState<string | null>(
+    () => (initialDateKey && initialDateKey !== todayKey ? initialDateKey : null),
+  );
+  const selectedDateKey = selectedDateOverride ?? todayKey;
+
+  function selectDate(dateKey: string) {
+    setSelectedDateOverride(dateKey === todayKey ? null : dateKey);
+  }
+
   const [filter, setFilter] = useState<TimelineFilter>('all');
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -70,6 +86,7 @@ export function TimelineView({
     }
   }
 
+  const dailyStats = computeDailyStats(events, selectedDateKey, timeZone, nowMs);
   const dayEvents = getEventsForLocalDay(
     events,
     selectedDateKey,
@@ -92,6 +109,17 @@ export function TimelineView({
     if (filter === 'spit_up') return e.type === 'spit_up';
     return e.type === 'vitamin';
   });
+
+  const visibleSummaryCategories: readonly SummaryCardCategory[] =
+    filter === 'all'
+      ? ALL_SUMMARY_CATEGORIES
+      : filter === 'feeds'
+        ? ['feeding']
+        : filter === 'sleep'
+          ? ['sleep']
+          : filter === 'diaper' || filter === 'spit_up'
+            ? ['diapers']
+            : [];
 
   function renderSummary(event: TrackingEvent): {
     title: string;
@@ -221,7 +249,7 @@ export function TimelineView({
           <button
             type="button"
             aria-label={t('timeline.previousDayAria')}
-            onClick={() => setSelectedDateKey(addDays(selectedDateKey, -1))}
+            onClick={() => selectDate(addDays(selectedDateKey, -1))}
             className="bt-focus-ring inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl border border-slate-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
           >
             <ChevronLeft className="h-4 w-4" />
@@ -231,14 +259,14 @@ export function TimelineView({
             aria-label={t('timeline.selectDateAria')}
             value={selectedDateKey}
             onChange={(e) => {
-              if (e.target.value) setSelectedDateKey(e.target.value);
+              if (e.target.value) selectDate(e.target.value);
             }}
             className="bt-focus-ring min-h-[44px] rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium dark:border-slate-700 dark:bg-slate-950"
           />
           <button
             type="button"
             aria-label={t('timeline.nextDayAria')}
-            onClick={() => setSelectedDateKey(addDays(selectedDateKey, 1))}
+            onClick={() => selectDate(addDays(selectedDateKey, 1))}
             className="bt-focus-ring inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl border border-slate-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
           >
             <ChevronRight className="h-4 w-4" />
@@ -249,7 +277,7 @@ export function TimelineView({
           <button
             type="button"
             aria-pressed={selectedDateKey === yesterdayKey}
-            onClick={() => setSelectedDateKey(yesterdayKey)}
+            onClick={() => selectDate(yesterdayKey)}
             className={`bt-focus-ring min-h-[44px] rounded-xl px-3 text-xs font-semibold ${
               selectedDateKey === yesterdayKey
                 ? 'bg-teal-600 text-white'
@@ -261,7 +289,7 @@ export function TimelineView({
           <button
             type="button"
             aria-pressed={selectedDateKey === todayKey}
-            onClick={() => setSelectedDateKey(todayKey)}
+            onClick={() => selectDate(todayKey)}
             className={`bt-focus-ring min-h-[44px] rounded-xl px-3 text-xs font-semibold ${
               selectedDateKey === todayKey
                 ? 'bg-teal-600 text-white'
@@ -272,6 +300,26 @@ export function TimelineView({
           </button>
         </div>
       </div>
+
+      {/* Selected Day Summary */}
+      {visibleSummaryCategories.length > 0 && (
+        <section
+          aria-label={t('timeline.daySummaryAria', { date: selectedDateKey })}
+          className={`grid gap-3 ${
+            visibleSummaryCategories.length === 1
+              ? 'grid-cols-1'
+              : 'grid-cols-2 sm:grid-cols-3'
+          }`}
+        >
+          <DailySummaryCards
+            stats={dailyStats}
+            volumeUnit={volumeUnit}
+            isToday={selectedDateKey === todayKey}
+            categories={visibleSummaryCategories}
+            compact
+          />
+        </section>
+      )}
 
       {/* Category Filter */}
       <div className="flex flex-wrap gap-2">

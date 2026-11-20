@@ -126,6 +126,10 @@ export function App() {
   });
 
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
+  const [timelineInitialDateKey, setTimelineInitialDateKey] = useState<
+    string | null
+  >(null);
+  const [timelineResetNonce, setTimelineResetNonce] = useState(0);
   const [modal, setModal] = useState<ModalRequest | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>(() => getSyncStatus());
 
@@ -506,7 +510,13 @@ export function App() {
                 key={item.id}
                 type="button"
                 aria-current={active ? 'page' : undefined}
-                onClick={() => setActiveTab(item.id)}
+                onClick={() => {
+                  setTimelineInitialDateKey(null);
+                  if (item.id === 'timeline') {
+                    setTimelineResetNonce((n) => n + 1);
+                  }
+                  setActiveTab(item.id);
+                }}
                 className={`bt-focus-ring flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3.5 text-sm font-medium transition ${
                   active
                     ? 'bg-teal-50 text-teal-700 ring-1 ring-teal-200/70 dark:bg-teal-950/70 dark:text-teal-300 dark:ring-teal-800/60'
@@ -668,16 +678,21 @@ export function App() {
               volumeUnit={volumeUnit}
               onOpenModal={setModal}
               onDiaperQuickLogged={handleDiaperQuickLogged}
-              onViewTimeline={() => setActiveTab('timeline')}
+              onViewTimeline={(dateKey) => {
+                setTimelineInitialDateKey(dateKey ?? null);
+                setActiveTab('timeline');
+              }}
             />
           )}
 
           {activeTab === 'timeline' && (
             <TimelineView
+              key={timelineResetNonce}
               events={events}
               userId={user.id}
               volumeUnit={volumeUnit}
               nowMs={nowMs}
+              initialDateKey={timelineInitialDateKey}
               onEditEvent={(ev) => setModal({ kind: 'edit', event: ev })}
             />
           )}
@@ -728,7 +743,13 @@ export function App() {
               key={item.id}
               type="button"
               aria-current={active ? 'page' : undefined}
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => {
+                setTimelineInitialDateKey(null);
+                if (item.id === 'timeline') {
+                  setTimelineResetNonce((n) => n + 1);
+                }
+                setActiveTab(item.id);
+              }}
               className={`flex min-h-[52px] min-w-[44px] flex-col items-center justify-center gap-0.5 px-1 py-1.5 text-[11px] font-medium ${
                 active
                   ? 'text-teal-600 dark:text-teal-400'
