@@ -3,6 +3,8 @@ import {
   ArrowLeftRight,
   Baby as BabyIcon,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Droplets,
   Milk,
@@ -17,6 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  addDays,
   computeDailyStats,
   computeLastActivitySummary,
   toLocalDateKey,
@@ -40,10 +43,12 @@ import {
 } from '../lib/store.js';
 import type { BottleFeedEvent, DiaperEvent } from '@baby-tracker/shared';
 import { useI18n } from '../lib/i18n.js';
+import { DailySummaryCards } from './DailySummaryCards.js';
 import {
   formatClock,
   getLocalTimeZone,
   getTodayDateKey,
+  getYesterdayDateKey,
   type VolumeUnit,
 } from './uiUtils.js';
 
@@ -66,7 +71,7 @@ interface DashboardViewProps {
   volumeUnit: VolumeUnit;
   onOpenModal: (req: ModalRequest) => void;
   onDiaperQuickLogged: (event: DiaperEvent) => void;
-  onViewTimeline: () => void;
+  onViewTimeline: (dateKey?: string) => void;
 }
 
 export function DashboardView({
@@ -90,7 +95,19 @@ export function DashboardView({
   } = useI18n();
   const timeZone = getLocalTimeZone();
   const todayKey = getTodayDateKey(timeZone, nowMs);
-  const dailyStats = computeDailyStats(events, todayKey, timeZone, nowMs);
+  const yesterdayKey = getYesterdayDateKey(timeZone, nowMs);
+  const [selectedSummaryDateOverride, setSelectedSummaryDateOverride] =
+    useState<string | null>(null);
+
+  const selectedSummaryDateKey = selectedSummaryDateOverride ?? todayKey;
+  const isSummaryToday = selectedSummaryDateKey === todayKey;
+  const isSummaryYesterday = selectedSummaryDateKey === yesterdayKey;
+  const canGoNextSummaryDay = selectedSummaryDateKey < todayKey;
+
+  const todayStats = computeDailyStats(events, todayKey, timeZone, nowMs);
+  const summaryStats = isSummaryToday
+    ? todayStats
+    : computeDailyStats(events, selectedSummaryDateKey, timeZone, nowMs);
   const lastActivity = computeLastActivitySummary(events, nowMs);
 
   const todayVitaminEvent =
@@ -99,7 +116,7 @@ export function DashboardView({
       todayKey
       ? lastActivity.lastVitamin
       : null;
-  const vitaminGivenToday = dailyStats.vitaminGiven;
+  const vitaminGivenToday = todayStats.vitaminGiven;
 
   const lastBreast = lastActivity.lastBreastFeed;
   const lastSide = lastBreast?.lastSide ?? null;
@@ -109,6 +126,20 @@ export function DashboardView({
 
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  function handlePrevSummaryDay() {
+    setSelectedSummaryDateOverride(addDays(selectedSummaryDateKey, -1));
+  }
+
+  function handleNextSummaryDay() {
+    if (!canGoNextSummaryDay) return;
+    const nextKey = addDays(selectedSummaryDateKey, 1);
+    setSelectedSummaryDateOverride(nextKey >= todayKey ? null : nextKey);
+  }
+
+  function handleTodaySummary() {
+    setSelectedSummaryDateOverride(null);
+  }
 
   async function runAction(actionKey: string, fn: () => Promise<unknown>) {
     if (busyAction !== null) return;
@@ -151,8 +182,11 @@ export function DashboardView({
     );
   }
 
-  const breastmilkMl = dailyStats.bottleMlByMilkType.breastmilk ?? 0;
-  const formulaMl = dailyStats.bottleMlByMilkType.formula ?? 0;
+  const summaryHeading = isSummaryToday
+    ? t('dashboard.todaysSummary', { date: selectedSummaryDateKey })
+    : isSummaryYesterday
+      ? t('dashboard.yesterdaysSummary', { date: selectedSummaryDateKey })
+      : t('dashboard.daySummary', { date: selectedSummaryDateKey });
 
   return (
     <div className="space-y-6">
@@ -754,24 +788,64 @@ export function DashboardView({
 
       {/* Daily KPI Summary Cards */}
       <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-            {t('dashboard.todaysSummary', { date: todayKey })}
-          </h2>
-          <button
-            type="button"
-            onClick={onViewTimeline}
-            className="bt-focus-ring inline-flex min-h-[44px] items-center rounded-xl px-2 text-sm font-medium text-teal-600 hover:underline dark:text-teal-400"
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+          <h2
+            aria-live="polite"
+            className="text-base font-semibold text-slate-900 dark:text-slate-100"
           >
-            {t('dashboard.viewFullTimeline')}
-          </button>
+            {summaryHeading}
+          </h2>
+          <div className="flex flex-wrap items-center justify-between gap-2 sm:justify-end">
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                aria-label={t('timeline.previousDayAria')}
+                onClick={handlePrevSummaryDay}
+                className="bt-focus-ring inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl border border-slate-200 bg-white hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              {!isSummaryToday && (
+                <button
+                  type="button"
+                  onClick={handleTodaySummary}
+                  className="bt-focus-ring inline-flex min-h-[44px] items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                >
+                  {t('timeline.today')}
+                </button>
+              )}
+              <button
+                type="button"
+                aria-label={t('timeline.nextDayAria')}
+                disabled={!canGoNextSummaryDay}
+                onClick={handleNextSummaryDay}
+                className="bt-focus-ring inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl border border-slate-200 bg-white enabled:hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:enabled:hover:bg-slate-800"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => onViewTimeline(selectedSummaryDateKey)}
+              className="bt-focus-ring inline-flex min-h-[44px] items-center rounded-xl px-2 text-sm font-medium text-teal-600 hover:underline dark:text-teal-400"
+            >
+              {t('dashboard.viewFullTimeline')}
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <div className="bt-card p-4">
-            <div className="flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
-              <Clock className="h-3.5 w-3.5" />
-              <span>{t('dashboard.lastFeedAndSleep')}</span>
+          <div className="bt-card min-w-0 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
+              <span className="inline-flex items-center gap-1.5">
+                <Clock className="h-3.5 w-3.5 shrink-0" />
+                <span>{t('dashboard.lastFeedAndSleep')}</span>
+              </span>
+              {!isSummaryToday && (
+                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                  {t('dashboard.liveBadge')}
+                </span>
+              )}
             </div>
             <div className="mt-2 space-y-1 text-sm">
               <p className="font-semibold text-slate-900 dark:text-slate-100">
@@ -793,78 +867,11 @@ export function DashboardView({
             </div>
           </div>
 
-          <div className="bt-card bt-card-breast p-4">
-            <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
-              {t('dashboard.feedingToday')}
-            </div>
-            <div className="tabular-nums-clock mt-1 text-2xl font-bold text-slate-900 dark:text-slate-100">
-              {dailyStats.totalFeedCount}{' '}
-              <span className="text-sm font-normal text-slate-500 dark:text-slate-400">
-                {t('dashboard.feedsUnit')}
-              </span>
-            </div>
-            <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-              {t('dashboard.breastSummary', {
-                total: formatDurationShort(dailyStats.breastTotalSeconds),
-                left: Math.round(dailyStats.breastLeftSeconds / 60),
-                right: Math.round(dailyStats.breastRightSeconds / 60),
-              })}
-            </p>
-            <p className="text-xs text-slate-600 dark:text-slate-400">
-              {t('dashboard.bottleSummary', {
-                total: formatVolume(dailyStats.bottleTotalMl, volumeUnit),
-              })}
-              {(breastmilkMl > 0 || formulaMl > 0) &&
-                t('dashboard.bottleBreakdown', {
-                  bm: formatVolume(breastmilkMl, volumeUnit),
-                  fm: formatVolume(formulaMl, volumeUnit),
-                })}
-            </p>
-          </div>
-
-          <div className="bt-card bt-card-sleep p-4">
-            <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
-              {t('dashboard.sleepToday')}
-            </div>
-            <div className="tabular-nums-clock mt-1 text-2xl font-bold text-slate-900 dark:text-slate-100">
-              {formatDurationShort(dailyStats.totalSleepSeconds)}
-            </div>
-            <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-              {t('dashboard.napSummary', {
-                duration: formatDurationShort(dailyStats.napSleepSeconds),
-                count: dailyStats.napCount,
-              })}
-            </p>
-            <p className="text-xs text-slate-600 dark:text-slate-400">
-              {t('dashboard.nightSummary', {
-                duration: formatDurationShort(dailyStats.nightSleepSeconds),
-                count: dailyStats.nightCount,
-              })}
-            </p>
-          </div>
-
-          <div className="bt-card bt-card-diaper p-4">
-            <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
-              {t('dashboard.diapersAndSpitUp')}
-            </div>
-            <div className="tabular-nums-clock mt-1 text-2xl font-bold text-slate-900 dark:text-slate-100">
-              {t('dashboard.wetPoopySummary', {
-                wet: dailyStats.wetCount,
-                poopy: dailyStats.poopyCount,
-              })}
-            </div>
-            <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-              {t('dashboard.changesCount', {
-                count: dailyStats.diaperEventCount,
-              })}
-              {dailyStats.rashCount > 0
-                ? t('dashboard.rashCount', { count: dailyStats.rashCount })
-                : ''}
-            </p>
-            <p className="text-xs text-slate-600 dark:text-slate-400">
-              {t('dashboard.spitUpsCount', { count: dailyStats.spitUpCount })}
-            </p>
-          </div>
+          <DailySummaryCards
+            stats={summaryStats}
+            volumeUnit={volumeUnit}
+            isToday={isSummaryToday}
+          />
         </div>
       </section>
     </div>
