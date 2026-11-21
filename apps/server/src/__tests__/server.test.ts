@@ -2383,4 +2383,197 @@ describe('Baby Tracker Server (M2)', () => {
     expect(viewerPush.statusCode).toBe(200);
     expect(viewerPush.json().rejected).toHaveLength(1);
   });
+
+  it('syncs pumping and tummy_time events via push/pull and rejects viewer mutations', async () => {
+    const app = await createTestApp();
+
+    const ownerReg = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: {
+        email: 'pump-owner@example.com',
+        password: 'password123',
+        displayName: 'Owner',
+      },
+    });
+    expect(ownerReg.statusCode).toBe(201);
+    const ownerCookie = extractCookie(ownerReg);
+    const ownerId = (ownerReg.json() as { user: { id: string } }).user.id;
+
+    const viewerReg = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: {
+        email: 'pump-viewer@example.com',
+        password: 'password123',
+        displayName: 'Viewer',
+      },
+    });
+    expect(viewerReg.statusCode).toBe(201);
+    const viewerCookie = extractCookie(viewerReg);
+    const viewerId = (viewerReg.json() as { user: { id: string } }).user.id;
+
+    const babyId = crypto.randomUUID();
+    const pumpingId = crypto.randomUUID();
+    const tummyId = crypto.randomUUID();
+    const t1 = '2026-06-15T10:00:00.000Z';
+    const t2 = '2026-06-15T10:15:00.000Z';
+
+    const pushRes = await app.inject({
+      method: 'POST',
+      url: '/api/sync/push',
+      headers: { cookie: ownerCookie },
+      payload: {
+        mutations: [
+          {
+            mutationId: crypto.randomUUID(),
+            entityType: 'baby',
+            op: 'upsert',
+            clientUpdatedAt: t1,
+            data: {
+              id: babyId,
+              name: 'Pump Baby',
+              dob: '2026-01-01',
+              avatarColor: '#9333ea',
+              isArchived: false,
+              createdByUserId: ownerId,
+              createdAt: t1,
+              updatedAt: t1,
+              deletedAt: null,
+            },
+          },
+          {
+            mutationId: crypto.randomUUID(),
+            entityType: 'event',
+            op: 'upsert',
+            clientUpdatedAt: t2,
+            data: {
+              id: pumpingId,
+              babyId,
+              type: 'pumping',
+              startedAt: t1,
+              endedAt: t2,
+              notes: 'Morning pump',
+              payload: {
+                side: 'both',
+                volumeMl: 120,
+                leftVolumeMl: 60,
+                rightVolumeMl: 60,
+              },
+              loggedByUserId: ownerId,
+              updatedByUserId: ownerId,
+              createdAt: t1,
+              updatedAt: t2,
+              deletedAt: null,
+            },
+          },
+          {
+            mutationId: crypto.randomUUID(),
+            entityType: 'event',
+            op: 'upsert',
+            clientUpdatedAt: t2,
+            data: {
+              id: tummyId,
+              babyId,
+              type: 'tummy_time',
+              startedAt: t1,
+              endedAt: t2,
+              notes: 'Mat play',
+              payload: { mood: 'happy' },
+              loggedByUserId: ownerId,
+              updatedByUserId: ownerId,
+              createdAt: t1,
+              updatedAt: t2,
+              deletedAt: null,
+            },
+          },
+        ],
+      },
+    });
+    expect(pushRes.statusCode).toBe(200);
+    expect(pushRes.json().rejected).toEqual([]);
+
+    const inviteRes = await app.inject({
+      method: 'POST',
+      url: `/api/babies/${babyId}/invites`,
+      headers: { cookie: ownerCookie },
+      payload: { role: 'viewer' },
+    });
+    expect(inviteRes.statusCode).toBe(201);
+    const inviteCode = (inviteRes.json() as { invite: { code: string } }).invite.code;
+
+    const acceptRes = await app.inject({
+      method: 'POST',
+      url: '/api/invites/accept',
+      headers: { cookie: viewerCookie },
+      payload: { code: inviteCode },
+    });
+    expect(acceptRes.statusCode).toBe(200);
+
+    const viewerPull = await app.inject({
+      method: 'GET',
+      url: '/api/sync/pull?since_seq=0',
+      headers: { cookie: viewerCookie },
+    });
+    expect(viewerPull.statusCode).toBe(200);
+    const pulledEvents = (
+      viewerPull.json() as { events: Array<{ id: string; type: string }> }
+    ).events;
+    expect(
+      pulledEvents.some((e) => e.id === pumpingId && e.type === 'pumping'),
+    ).toBe(true);
+    expect(
+      pulledEvents.some((e) => e.id === tummyId && e.type === 'tummy_time'),
+    ).toBe(true);
+
+    const viewerPush = await app.inject({
+      method: 'POST',
+      url: '/api/sync/push',
+      headers: { cookie: viewerCookie },
+      payload: {
+        mutations: [
+          {
+            mutationId: crypto.randomUUID(),
+            entityType: 'event',
+            op: 'upsert',
+            clientUpdatedAt: t2,
+            data: {
+              id: crypto.randomUUID(),
+              babyId,
+              type: 'pumping',
+              startedAt: t1,
+              endedAt: t2,
+              payload: { side: 'left', volumeMl: 40 },
+              loggedByUserId: viewerId,
+              updatedByUserId: viewerId,
+              createdAt: t1,
+              updatedAt: t2,
+              deletedAt: null,
+            },
+          },
+          {
+            mutationId: crypto.randomUUID(),
+            entityType: 'event',
+            op: 'upsert',
+            clientUpdatedAt: t2,
+            data: {
+              id: crypto.randomUUID(),
+              babyId,
+              type: 'tummy_time',
+              startedAt: t1,
+              endedAt: t2,
+              payload: { mood: 'fussy' },
+              loggedByUserId: viewerId,
+              updatedByUserId: viewerId,
+              createdAt: t1,
+              updatedAt: t2,
+              deletedAt: null,
+            },
+          },
+        ],
+      },
+    });
+    expect(viewerPush.statusCode).toBe(200);
+    expect(viewerPush.json().rejected).toHaveLength(2);
+  });
 });
