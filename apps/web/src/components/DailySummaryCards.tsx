@@ -2,12 +2,19 @@ import type { DailyStats } from '@baby-tracker/shared';
 import { useI18n } from '../lib/i18n.js';
 import type { VolumeUnit } from './uiUtils.js';
 
-export type SummaryCardCategory = 'feeding' | 'sleep' | 'diapers';
+export type SummaryCardCategory =
+  | 'feeding'
+  | 'sleep'
+  | 'diapers'
+  | 'pumping'
+  | 'tummy_time';
 
 export const ALL_SUMMARY_CATEGORIES: readonly SummaryCardCategory[] = [
   'feeding',
   'sleep',
   'diapers',
+  'pumping',
+  'tummy_time',
 ];
 
 interface DailySummaryCardsProps {
@@ -19,7 +26,7 @@ interface DailySummaryCardsProps {
 }
 
 /**
- * Reusable day-level KPI summary cards (Feeding, Sleep, Diapers & Spit-Up).
+ * Reusable day-level KPI summary cards (Feeding, Sleep, Diapers & Spit-Up, Pumping, Tummy Time).
  * Returns a Fragment so callers can compose the cards directly into their own grid.
  */
 export function DailySummaryCards({
@@ -39,7 +46,10 @@ export function DailySummaryCards({
   const showFeeding = categories.includes('feeding');
   const showSleep = categories.includes('sleep');
   const showDiapers = categories.includes('diapers');
-  const spanFeedingOnMobile = compact && categories.length > 1;
+  const showPumping = categories.includes('pumping');
+  const showTummyTime = categories.includes('tummy_time');
+  const spanFeedingOnMobile =
+    compact && categories.length > 1 && categories.length % 2 === 1;
 
   return (
     <>
@@ -122,6 +132,39 @@ export function DailySummaryCards({
           </p>
           <p className="text-xs text-slate-600 dark:text-slate-400">
             {t('dashboard.spitUpsCount', { count: stats.spitUpCount })}
+          </p>
+        </div>
+      )}
+
+      {showPumping && (
+        <div className={`bt-card bt-card-pumping min-w-0 ${padClass}`}>
+          <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
+            {isToday ? t('dashboard.pumpingToday') : t('dashboard.pumping')}
+          </div>
+          <div className={metricClass}>
+            {formatVolume(stats.pumpingTotalMl, volumeUnit)}
+          </div>
+          <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+            {t('dashboard.pumpingSummary', {
+              count: stats.pumpingCount,
+              duration: formatDurationShort(stats.pumpingTotalSeconds),
+            })}
+          </p>
+        </div>
+      )}
+
+      {showTummyTime && (
+        <div className={`bt-card bt-card-tummy min-w-0 ${padClass}`}>
+          <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
+            {isToday ? t('dashboard.tummyTimeToday') : t('dashboard.tummyTime')}
+          </div>
+          <div className={metricClass}>
+            {formatDurationShort(stats.tummyTimeTotalSeconds)}
+          </div>
+          <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+            {t('dashboard.tummyTimeSummary', {
+              count: stats.tummyTimeCount,
+            })}
           </p>
         </div>
       )}

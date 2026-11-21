@@ -6,10 +6,12 @@ import {
   type TrackingEvent,
 } from '@baby-tracker/shared';
 import {
+  Activity,
   Baby as BabyIcon,
   ChevronLeft,
   ChevronRight,
   Droplets,
+  GlassWater,
   Milk,
   Moon,
   Pencil,
@@ -38,7 +40,9 @@ type TimelineFilter =
   | 'sleep'
   | 'diaper'
   | 'spit_up'
-  | 'vitamin';
+  | 'vitamin'
+  | 'pumping'
+  | 'tummy_time';
 
 interface TimelineViewProps {
   events: TrackingEvent[];
@@ -107,6 +111,8 @@ export function TimelineView({
     if (filter === 'sleep') return e.type === 'sleep';
     if (filter === 'diaper') return e.type === 'diaper';
     if (filter === 'spit_up') return e.type === 'spit_up';
+    if (filter === 'pumping') return e.type === 'pumping';
+    if (filter === 'tummy_time') return e.type === 'tummy_time';
     return e.type === 'vitamin';
   });
 
@@ -119,7 +125,11 @@ export function TimelineView({
           ? ['sleep']
           : filter === 'diaper' || filter === 'spit_up'
             ? ['diapers']
-            : [];
+            : filter === 'pumping'
+              ? ['pumping']
+              : filter === 'tummy_time'
+                ? ['tummy_time']
+                : [];
 
   function renderSummary(event: TrackingEvent): {
     title: string;
@@ -221,6 +231,58 @@ export function TimelineView({
           cardClass: 'bt-card-vitamin',
         };
       }
+      case 'pumping': {
+        const durSec =
+          event.endedAt !== null
+            ? Math.max(
+                0,
+                (Date.parse(event.endedAt) - Date.parse(event.startedAt)) / 1000,
+              )
+            : Math.max(0, (nowMs - Date.parse(event.startedAt)) / 1000);
+        const parts: string[] = [];
+        if (event.endedAt === null) {
+          parts.push(t('timeline.activeTimer'));
+        } else {
+          if (event.payload.volumeMl !== null) {
+            parts.push(formatVolume(event.payload.volumeMl, volumeUnit));
+          }
+          if (durSec > 0) {
+            parts.push(formatDurationShort(durSec));
+          }
+          if (event.payload.side) {
+            parts.push(t(`modals.pumping.side.${event.payload.side}`));
+          }
+          if (parts.length === 0) {
+            parts.push(t('dashboard.loggedFallback'));
+          }
+        }
+        return {
+          title: t('timeline.pumpingTitle'),
+          detail: parts.join(' · '),
+          icon: <GlassWater className="h-4 w-4" />,
+          badgeClass: 'bt-badge-pumping',
+          cardClass: 'bt-card-pumping',
+        };
+      }
+      case 'tummy_time': {
+        const durSec =
+          event.endedAt !== null
+            ? Math.max(
+                0,
+                (Date.parse(event.endedAt) - Date.parse(event.startedAt)) / 1000,
+              )
+            : Math.max(0, (nowMs - Date.parse(event.startedAt)) / 1000);
+        const mood = event.payload.mood
+          ? ` · ${t(`modals.tummy.mood.${event.payload.mood}`)}`
+          : '';
+        return {
+          title: t('timeline.tummyTimeTitle'),
+          detail: `${event.endedAt === null ? t('timeline.tummyTimePrefix') : ''}${formatDurationShort(durSec)}${mood}`,
+          icon: <Activity className="h-4 w-4" />,
+          badgeClass: 'bt-badge-tummy',
+          cardClass: 'bt-card-tummy',
+        };
+      }
     }
   }
 
@@ -308,7 +370,7 @@ export function TimelineView({
           className={`grid gap-3 ${
             visibleSummaryCategories.length === 1
               ? 'grid-cols-1'
-              : 'grid-cols-2 sm:grid-cols-3'
+              : 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'
           }`}
         >
           <DailySummaryCards
@@ -331,6 +393,8 @@ export function TimelineView({
             { id: 'diaper', label: t('timeline.filter.diaper') },
             { id: 'spit_up', label: t('timeline.filter.spit_up') },
             { id: 'vitamin', label: t('timeline.filter.vitamin') },
+            { id: 'pumping', label: t('timeline.filter.pumping') },
+            { id: 'tummy_time', label: t('timeline.filter.tummy_time') },
           ] as const
         ).map((tab) => (
           <button

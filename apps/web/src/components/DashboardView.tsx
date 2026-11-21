@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import {
+  Activity,
   ArrowLeftRight,
   Baby as BabyIcon,
   Check,
@@ -7,6 +8,7 @@ import {
   ChevronRight,
   Clock,
   Droplets,
+  GlassWater,
   Milk,
   Moon,
   Pause,
@@ -24,6 +26,7 @@ import {
   computeLastActivitySummary,
   toLocalDateKey,
   type DiaperKind,
+  type PumpingEvent,
   type TrackingEvent,
 } from '@baby-tracker/shared';
 import {
@@ -31,12 +34,15 @@ import {
   deleteEvent,
   finishBreastFeed,
   finishSleep,
+  finishTummyTime,
   logDiaper,
   pauseBreastFeed,
   resumeBreastFeed,
   startBottleFeed,
   startBreastFeed,
+  startPumping,
   startSleep,
+  startTummyTime,
   switchBreastSide,
   toggleVitaminForLocalDay,
   type ActiveTimersForBaby,
@@ -59,6 +65,9 @@ export type ModalRequest =
   | { kind: 'sleep_manual' }
   | { kind: 'diaper_details' }
   | { kind: 'spit_up' }
+  | { kind: 'pumping_manual' }
+  | { kind: 'pumping_finish'; event: PumpingEvent }
+  | { kind: 'tummy_time_manual' }
   | { kind: 'edit'; event: TrackingEvent };
 
 interface DashboardViewProps {
@@ -123,6 +132,8 @@ export function DashboardView({
   const activeBreast = timers.breastFeed;
   const activeBottle = timers.bottleFeed;
   const activeSleep = timers.sleep;
+  const activePumping = timers.pumping;
+  const activeTummyTime = timers.tummyTime;
 
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -784,6 +795,253 @@ export function DashboardView({
             </button>
           </div>
         </section>
+
+        {/* Pumping Card */}
+        <section
+          aria-label={t('dashboard.pumping')}
+          className="bt-card bt-card-pumping p-4"
+        >
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <span className="bt-badge-pumping inline-flex h-9 w-9 items-center justify-center rounded-xl">
+                <GlassWater className="h-5 w-5" />
+              </span>
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  {t('dashboard.pumping')}
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  {activePumping
+                    ? t('dashboard.pumpingNow')
+                    : lastActivity.lastPumping
+                      ? lastActivity.lastPumping.volumeMl !== null &&
+                        lastActivity.lastPumping.durationSeconds > 0
+                        ? t('dashboard.lastPumpingFull', {
+                            volume: formatVolume(
+                              lastActivity.lastPumping.volumeMl,
+                              volumeUnit,
+                            ),
+                            duration: formatDurationShort(
+                              lastActivity.lastPumping.durationSeconds,
+                            ),
+                            ago: formatTimeAgo(
+                              lastActivity.lastPumping.secondsSinceEnd,
+                            ),
+                          })
+                        : lastActivity.lastPumping.volumeMl !== null
+                          ? t('dashboard.lastPumpingVol', {
+                              volume: formatVolume(
+                                lastActivity.lastPumping.volumeMl,
+                                volumeUnit,
+                              ),
+                              ago: formatTimeAgo(
+                                lastActivity.lastPumping.secondsSinceEnd,
+                              ),
+                            })
+                          : t('dashboard.lastPumpingDur', {
+                              duration: formatDurationShort(
+                                lastActivity.lastPumping.durationSeconds,
+                              ),
+                              ago: formatTimeAgo(
+                                lastActivity.lastPumping.secondsSinceEnd,
+                              ),
+                            })
+                      : t('dashboard.noPumpingLogged')}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenModal({ kind: 'pumping_manual' })}
+              className="bt-focus-ring inline-flex min-h-[44px] items-center gap-1 rounded-xl px-2.5 text-xs font-medium text-purple-700 hover:bg-purple-50 dark:text-purple-300 dark:hover:bg-purple-950"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>{t('dashboard.logPump')}</span>
+            </button>
+          </div>
+
+          {activePumping ? (
+            <div className="space-y-3">
+              <div className="rounded-xl bg-purple-50 p-3 dark:bg-purple-950/60">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-purple-700 dark:text-purple-300">
+                    {t('dashboard.pumpingInProgress')}
+                  </span>
+                  <span className="tabular-nums-clock font-mono text-2xl font-bold text-purple-800 dark:text-purple-200">
+                    {formatClock(
+                      Math.max(
+                        0,
+                        (nowMs - Date.parse(activePumping.startedAt)) / 1000,
+                      ),
+                    )}
+                  </span>
+                </div>
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                <button
+                  type="button"
+                  disabled={busyAction !== null}
+                  onClick={() =>
+                    onOpenModal({
+                      kind: 'pumping_finish',
+                      event: activePumping,
+                    })
+                  }
+                  className="bt-focus-ring col-span-3 inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-purple-600 px-3 text-sm font-semibold text-white hover:bg-purple-700 disabled:opacity-60"
+                >
+                  <Check className="h-4 w-4" />
+                  <span>{t('dashboard.finishLogVolume')}</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={busyAction !== null}
+                  onClick={() =>
+                    void runAction('pumping:discard', () =>
+                      deleteEvent(activePumping.id, userId),
+                    )
+                  }
+                  aria-label={t('dashboard.discardPumpingAria')}
+                  className="bt-focus-ring inline-flex min-h-[44px] items-center justify-center rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 disabled:opacity-60 dark:border-rose-900 dark:text-rose-400"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                disabled={busyAction !== null}
+                onClick={() =>
+                  void runAction('pumping:start', () =>
+                    startPumping({ babyId, userId, userName }),
+                  )
+                }
+                className="bt-focus-ring min-h-[48px] rounded-xl bg-purple-600 px-3 py-2 text-sm font-semibold text-white hover:bg-purple-700 disabled:opacity-60"
+              >
+                {t('dashboard.startPump')}
+              </button>
+              <button
+                type="button"
+                onClick={() => onOpenModal({ kind: 'pumping_manual' })}
+                className="bt-focus-ring min-h-[48px] rounded-xl border border-purple-200 bg-purple-50 px-3 py-2 text-sm font-semibold text-purple-800 hover:bg-purple-100 dark:border-purple-800 dark:bg-purple-950/60 dark:text-purple-200"
+              >
+                {t('dashboard.quickEntry')}
+              </button>
+            </div>
+          )}
+        </section>
+
+        {/* Tummy Time Card */}
+        <section
+          aria-label={t('dashboard.tummyTime')}
+          className="bt-card bt-card-tummy p-4"
+        >
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <span className="bt-badge-tummy inline-flex h-9 w-9 items-center justify-center rounded-xl">
+                <Activity className="h-5 w-5" />
+              </span>
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  {t('dashboard.tummyTime')}
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  {activeTummyTime
+                    ? t('dashboard.tummyTimeNow')
+                    : lastActivity.lastTummyTime
+                      ? t('dashboard.lastTummyTime', {
+                          duration: formatDurationShort(
+                            lastActivity.lastTummyTime.durationSeconds,
+                          ),
+                          ago: formatTimeAgo(
+                            lastActivity.lastTummyTime.secondsSinceEnd,
+                          ),
+                        })
+                      : t('dashboard.noTummyTimeLogged')}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenModal({ kind: 'tummy_time_manual' })}
+              className="bt-focus-ring inline-flex min-h-[44px] items-center gap-1 rounded-xl px-2.5 text-xs font-medium text-orange-700 hover:bg-orange-50 dark:text-orange-300 dark:hover:bg-orange-950"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>{t('dashboard.logTummyTime')}</span>
+            </button>
+          </div>
+
+          {activeTummyTime ? (
+            <div className="space-y-3">
+              <div className="rounded-xl bg-orange-50 p-3 dark:bg-orange-950/60">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-orange-700 dark:text-orange-300">
+                    {t('dashboard.tummyTimeInProgress')}
+                  </span>
+                  <span className="tabular-nums-clock font-mono text-2xl font-bold text-orange-800 dark:text-orange-200">
+                    {formatClock(
+                      Math.max(
+                        0,
+                        (nowMs - Date.parse(activeTummyTime.startedAt)) / 1000,
+                      ),
+                    )}
+                  </span>
+                </div>
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                <button
+                  type="button"
+                  disabled={busyAction !== null}
+                  onClick={() =>
+                    void runAction('tummy:finish', () =>
+                      finishTummyTime({ babyId, userId }),
+                    )
+                  }
+                  className="bt-focus-ring col-span-3 inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-orange-600 px-3 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-60"
+                >
+                  <Check className="h-4 w-4" />
+                  <span>{t('dashboard.finish')}</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={busyAction !== null}
+                  onClick={() =>
+                    void runAction('tummy:discard', () =>
+                      deleteEvent(activeTummyTime.id, userId),
+                    )
+                  }
+                  aria-label={t('dashboard.discardTummyTimeAria')}
+                  className="bt-focus-ring inline-flex min-h-[44px] items-center justify-center rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 disabled:opacity-60 dark:border-rose-900 dark:text-rose-400"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                disabled={busyAction !== null}
+                onClick={() =>
+                  void runAction('tummy:start', () =>
+                    startTummyTime({ babyId, userId, userName }),
+                  )
+                }
+                className="bt-focus-ring min-h-[48px] rounded-xl bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-60"
+              >
+                {t('dashboard.startTimer')}
+              </button>
+              <button
+                type="button"
+                onClick={() => onOpenModal({ kind: 'tummy_time_manual' })}
+                className="bt-focus-ring min-h-[48px] rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-800 hover:bg-orange-100 dark:border-orange-800 dark:bg-orange-950/60 dark:text-orange-200"
+              >
+                {t('dashboard.quickEntry')}
+              </button>
+            </div>
+          )}
+        </section>
       </section>
 
       {/* Daily KPI Summary Cards */}
@@ -834,7 +1092,7 @@ export function DashboardView({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
           <div className="bt-card min-w-0 p-4">
             <div className="flex flex-wrap items-center justify-between gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
               <span className="inline-flex items-center gap-1.5">

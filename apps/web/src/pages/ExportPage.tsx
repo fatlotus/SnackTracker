@@ -230,7 +230,7 @@ export function ExportPage({
         </div>
 
         {/* Summary Preview */}
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
           <div className="bt-card p-4">
             <p className="text-xs text-slate-500 dark:text-slate-400">
               {t('export.period')}
@@ -280,6 +280,30 @@ export function ExportPage({
             </p>
             <p className="text-xs text-slate-500 dark:text-slate-400">
               {t('export.spitUpsTotal', { count: totals.spitUpCount })}
+            </p>
+          </div>
+          <div className="bt-card bt-card-pumping p-4">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {t('export.pumpingAvgDay')}
+            </p>
+            <p className="tabular-nums-clock mt-1 text-lg font-bold">
+              {formatVolume(averagesPerDay.pumpingTotalMl, volumeUnit)}
+            </p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {t('export.pumpingSessionsTotal', { count: totals.pumpingCount })}
+            </p>
+          </div>
+          <div className="bt-card bt-card-tummy p-4">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {t('export.tummyTimeAvgDay')}
+            </p>
+            <p className="tabular-nums-clock mt-1 text-lg font-bold">
+              {formatDurationShort(averagesPerDay.tummyTimeTotalSeconds)}
+            </p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {t('export.tummyTimeSessionsTotal', {
+                count: totals.tummyTimeCount,
+              })}
             </p>
           </div>
         </div>
@@ -394,6 +418,18 @@ export function ExportPage({
               ? `共 ${totals.spitUpCount} 次（日均 ${averagesPerDay.spitUpCount.toFixed(1)} 次）`
               : `${totals.spitUpCount} total (${averagesPerDay.spitUpCount.toFixed(1)}/day avg)`}
           </div>
+          <div>
+            <strong>{t('export.col.pumping')}：</strong>
+            {locale === 'zh-CN'
+              ? `共 ${totals.pumpingCount} 次（总计 ${Math.round(totals.pumpingTotalMl)} ${t('common.ml')}，日均 ${Math.round(averagesPerDay.pumpingTotalMl)} ${t('common.ml')}）`
+              : `${totals.pumpingCount} sessions (${Math.round(totals.pumpingTotalMl)} ml total, ${Math.round(averagesPerDay.pumpingTotalMl)} ml/day avg)`}
+          </div>
+          <div>
+            <strong>{t('export.col.tummyTime')}：</strong>
+            {locale === 'zh-CN'
+              ? `总计 ${formatDurationShort(totals.tummyTimeTotalSeconds)}（日均 ${formatDurationShort(averagesPerDay.tummyTimeTotalSeconds)}；共 ${totals.tummyTimeCount} 次）`
+              : `${formatDurationShort(totals.tummyTimeTotalSeconds)} total (${formatDurationShort(averagesPerDay.tummyTimeTotalSeconds)}/day avg; ${totals.tummyTimeCount} sessions)`}
+          </div>
         </div>
 
         <div>
@@ -409,7 +445,9 @@ export function ExportPage({
                 <th className="py-1 pr-2">{t('export.col.breast')}</th>
                 <th className="py-1 pr-2">{t('export.col.bottle')}</th>
                 <th className="py-1 pr-2">{t('export.col.wetPoopy')}</th>
-                <th className="py-1">{t('export.col.spitUp')}</th>
+                <th className="py-1 pr-2">{t('export.col.spitUp')}</th>
+                <th className="py-1 pr-2">{t('export.col.pumping')}</th>
+                <th className="py-1">{t('export.col.tummyTime')}</th>
               </tr>
             </thead>
             <tbody>
@@ -431,7 +469,15 @@ export function ExportPage({
                   <td className="tabular-nums-clock py-1 pr-2">
                     {d.wetCount} / {d.poopyCount}
                   </td>
-                  <td className="tabular-nums-clock py-1">{d.spitUpCount}</td>
+                  <td className="tabular-nums-clock py-1 pr-2">
+                    {d.spitUpCount}
+                  </td>
+                  <td className="tabular-nums-clock py-1 pr-2">
+                    {Math.round(d.pumpingTotalMl)} {t('common.ml')}
+                  </td>
+                  <td className="tabular-nums-clock py-1">
+                    {formatDurationShort(d.tummyTimeTotalSeconds)}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -6,6 +6,8 @@ import type {
   DiaperEvent,
   DiaperKind,
   MilkType,
+  PumpingEvent,
+  PumpingSide,
   RelatedFeedType,
   SleepCategory,
   SleepEvent,
@@ -13,16 +15,21 @@ import type {
   SpitUpEvent,
   SpitUpSeverity,
   TrackingEvent,
+  TummyTimeEvent,
+  TummyTimeMood,
 } from '@baby-tracker/shared';
 import { X } from 'lucide-react';
 import { nowIso, uuidv4 } from '../lib/db.js';
 import {
   createEvent,
   finishBottleFeed,
+  finishPumping,
   logBottleFeed,
   logDiaper,
+  logPumping,
   logSleep,
   logSpitUp,
+  logTummyTime,
   updateEvent,
 } from '../lib/store.js';
 import { useI18n } from '../lib/i18n.js';
@@ -1206,6 +1213,688 @@ export function SpitUpModal({
             className="bt-focus-ring min-h-[44px] rounded-xl bg-rose-600 px-5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
           >
             {saving ? t('common.saving') : t('modals.spitUp.saveSpitUp')}
+          </button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
+// ============================================================================
+// Pumping Modal (Manual Entry, Finish Active, or Edit)
+// ============================================================================
+
+const PUMPING_SIDE_VALUES: readonly PumpingSide[] = ['left', 'right', 'both'];
+
+export function PumpingModal({
+  babyId,
+  userId,
+  userName,
+  volumeUnit,
+  existing,
+  finishingActive,
+  onClose,
+}: {
+  babyId: string;
+  userId: string;
+  userName: string | null;
+  volumeUnit: VolumeUnit;
+  existing?: PumpingEvent;
+  finishingActive?: PumpingEvent;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const target = finishingActive ?? existing;
+  const isEditingActive = Boolean(
+    existing && !finishingActive && existing.endedAt === null,
+  );
+  const [{ initialStartedLocal, initialEndedLocal }] = useState(() => {
+    const nowMs = Date.now();
+    const nowStr = toLocalDateTimeInputValue(new Date(nowMs).toISOString());
+    const defaultStartStr = toLocalDateTimeInputValue(
+      new Date(nowMs - 15 * 60 * 1000).toISOString(),
+    );
+    return {
+      initialStartedLocal: target
+        ? toLocalDateTimeInputValue(target.startedAt)
+        : defaultStartStr,
+      initialEndedLocal: finishingActive
+        ? nowStr
+        : existing?.endedAt
+          ? toLocalDateTimeInputValue(existing.endedAt)
+          : nowStr,
+    };
+  });
+
+  const [unit, setUnit] = useState<VolumeUnit>(volumeUnit);
+  const [side, setSide] = useState<PumpingSide>(target?.payload.side ?? 'both');
+  const [volumeStr, setVolumeStr] = useState(
+    target ? volumeMlToInputString(target.payload.volumeMl, volumeUnit) : '',
+  );
+  const [leftVolumeStr, setLeftVolumeStr] = useState(
+    target?.payload.leftVolumeMl != null
+      ? volumeMlToInputString(target.payload.leftVolumeMl, volumeUnit)
+      : '',
+  );
+  const [rightVolumeStr, setRightVolumeStr] = useState(
+    target?.payload.rightVolumeMl != null
+      ? volumeMlToInputString(target.payload.rightVolumeMl, volumeUnit)
+      : '',
+  );
+  const [startedLocal, setStartedLocal] = useState(initialStartedLocal);
+  const [endedLocal, setEndedLocal] = useState(initialEndedLocal);
+  const [notes, setNotes] = useState(target?.notes ?? '');
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  function handleUnitToggle(nextUnit: VolumeUnit) {
+    if (nextUnit === unit) return;
+    const totalMl = parseVolumeInputToMl(volumeStr, unit);
+    const leftMl = parseVolumeInputToMl(leftVolumeStr, unit);
+    const rightMl = parseVolumeInputToMl(rightVolumeStr, unit);
+    setUnit(nextUnit);
+    setVolumeStr(volumeMlToInputString(totalMl, nextUnit));
+    setLeftVolumeStr(volumeMlToInputString(leftMl, nextUnit));
+    setRightVolumeStr(volumeMlToInputString(rightMl, nextUnit));
+  }
+
+  function handleSideVolumeChange(nextLeft: string, nextRight: string) {
+    setLeftVolumeStr(nextLeft);
+    setRightVolumeStr(nextRight);
+    const l = parseVolumeInputToMl(nextLeft, unit);
+    const r = parseVolumeInputToMl(nextRight, unit);
+    if (l !== null || r !== null) {
+      setVolumeStr(volumeMlToInputString((l ?? 0) + (r ?? 0), unit));
+    } else if (nextLeft.trim() === '' && nextRight.trim() === '') {
+      setVolumeStr('');
+    }
+  }
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+
+    const parsedTotal = parseVolumeInputToMl(volumeStr, unit);
+    if (volumeStr.trim() !== '' && parsedTotal === null) {
+      setError(t('modals.pumping.invalidVolume'));
+      return;
+    }
+
+    let leftVolumeMl: number | null | undefined = undefined;
+    let rightVolumeMl: number | null | undefined = undefined;
+    if (side === 'both') {
+      const parsedLeft = parseVolumeInputToMl(leftVolumeStr, unit);
+      if (leftVolumeStr.trim() !== '' && parsedLeft === null) {
+        setError(t('modals.pumping.invalidVolume'));
+        return;
+      }
+      const parsedRight = parseVolumeInputToMl(rightVolumeStr, unit);
+      if (rightVolumeStr.trim() !== '' && parsedRight === null) {
+        setError(t('modals.pumping.invalidVolume'));
+        return;
+      }
+      leftVolumeMl = parsedLeft;
+      rightVolumeMl = parsedRight;
+    } else {
+      leftVolumeMl = null;
+      rightVolumeMl = null;
+    }
+
+    let volumeMl = parsedTotal;
+    if (
+      volumeMl === null &&
+      side === 'both' &&
+      (leftVolumeMl !== null || rightVolumeMl !== null)
+    ) {
+      volumeMl = (leftVolumeMl ?? 0) + (rightVolumeMl ?? 0);
+    }
+
+    if (
+      (volumeMl !== null && volumeMl > 2000) ||
+      (leftVolumeMl != null && leftVolumeMl > 2000) ||
+      (rightVolumeMl != null && rightVolumeMl > 2000)
+    ) {
+      setError(t('modals.pumping.invalidVolume'));
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const startedAtIso =
+        target && startedLocal === initialStartedLocal
+          ? target.startedAt
+          : fromLocalDateTimeInputValue(startedLocal);
+      const trimmedNotes = notes.trim() ? notes.trim() : null;
+
+      if (finishingActive) {
+        const endedAtIso =
+          endedLocal === initialEndedLocal
+            ? new Date().toISOString()
+            : fromLocalDateTimeInputValue(endedLocal);
+
+        if (Date.parse(endedAtIso) < Date.parse(startedAtIso)) {
+          setError(t('modals.pumping.endBeforeStart'));
+          return;
+        }
+
+        await finishPumping({
+          babyId,
+          userId,
+          side,
+          volumeMl,
+          leftVolumeMl,
+          rightVolumeMl,
+          at: endedAtIso,
+          notes: trimmedNotes,
+        });
+      } else if (existing) {
+        const endedAtIso = isEditingActive
+          ? null
+          : existing.endedAt && endedLocal === initialEndedLocal
+            ? existing.endedAt
+            : fromLocalDateTimeInputValue(endedLocal);
+
+        if (
+          endedAtIso !== null &&
+          Date.parse(endedAtIso) < Date.parse(startedAtIso)
+        ) {
+          setError(t('modals.pumping.endBeforeStart'));
+          return;
+        }
+
+        await updateEvent(existing.id, (prev) => {
+          if (prev.type !== 'pumping') {
+            throw new Error('Expected pumping event');
+          }
+          return {
+            ...prev,
+            startedAt: startedAtIso,
+            endedAt: endedAtIso,
+            notes: trimmedNotes,
+            updatedByUserId: userId,
+            payload: {
+              side,
+              volumeMl,
+              ...(leftVolumeMl !== undefined ? { leftVolumeMl } : {}),
+              ...(rightVolumeMl !== undefined ? { rightVolumeMl } : {}),
+            },
+          };
+        });
+      } else {
+        const endedAtIso = fromLocalDateTimeInputValue(endedLocal);
+        if (Date.parse(endedAtIso) < Date.parse(startedAtIso)) {
+          setError(t('modals.pumping.endBeforeStart'));
+          return;
+        }
+
+        await logPumping({
+          babyId,
+          userId,
+          userName,
+          startedAt: startedAtIso,
+          endedAt: endedAtIso,
+          side,
+          volumeMl,
+          leftVolumeMl,
+          rightVolumeMl,
+          notes: trimmedNotes,
+        });
+      }
+      onClose();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : t('modals.pumping.saveFailed'),
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <ModalShell
+      title={
+        finishingActive
+          ? t('modals.pumping.finishTitle')
+          : existing
+            ? t('modals.pumping.editTitle')
+            : t('modals.pumping.logTitle')
+      }
+      accentClass="bt-card-pumping"
+      onClose={onClose}
+    >
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <span className="mb-1.5 block text-sm font-medium">
+            {t('modals.pumping.side')}
+          </span>
+          <div className="grid grid-cols-3 gap-2">
+            {PUMPING_SIDE_VALUES.map((s) => (
+              <button
+                key={s}
+                type="button"
+                aria-pressed={side === s}
+                onClick={() => setSide(s)}
+                className={`bt-focus-ring min-h-[44px] rounded-xl border text-sm font-semibold transition ${
+                  side === s
+                    ? 'border-purple-600 bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-200'
+                    : 'border-slate-200 text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                }`}
+              >
+                {t(`modals.pumping.side.${s}`)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-1 flex items-center justify-between">
+            <label htmlFor="pumping-volume" className="text-sm font-medium">
+              {t('modals.pumping.volumeLabel', { unit: t(`common.${unit}`) })}
+            </label>
+            <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs dark:bg-slate-800">
+              {(['ml', 'oz'] as const).map((u) => (
+                <button
+                  key={u}
+                  type="button"
+                  aria-pressed={unit === u}
+                  onClick={() => handleUnitToggle(u)}
+                  className={`bt-focus-ring min-h-[44px] min-w-[44px] rounded-md px-2.5 py-1 font-medium ${
+                    unit === u
+                      ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-900 dark:text-slate-100'
+                      : 'text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  {t(`common.${u}`)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <input
+            id="pumping-volume"
+            type="number"
+            min={0}
+            max={2000}
+            step="any"
+            placeholder={
+              unit === 'oz'
+                ? t('modals.pumping.volumePlaceholderOz')
+                : t('modals.pumping.volumePlaceholderMl')
+            }
+            value={volumeStr}
+            onChange={(e) => {
+              setVolumeStr(e.target.value);
+              if (side !== 'both') {
+                setLeftVolumeStr('');
+                setRightVolumeStr('');
+              }
+            }}
+            className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+          />
+
+          {side === 'both' && (
+            <div className="mt-2.5 grid grid-cols-2 gap-2.5">
+              <div>
+                <label
+                  htmlFor="pumping-left-volume"
+                  className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400"
+                >
+                  {t('modals.pumping.leftVolumeLabel', {
+                    unit: t(`common.${unit}`),
+                  })}
+                </label>
+                <input
+                  id="pumping-left-volume"
+                  type="number"
+                  min={0}
+                  max={2000}
+                  step="any"
+                  value={leftVolumeStr}
+                  onChange={(e) =>
+                    handleSideVolumeChange(e.target.value, rightVolumeStr)
+                  }
+                  className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="pumping-right-volume"
+                  className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400"
+                >
+                  {t('modals.pumping.rightVolumeLabel', {
+                    unit: t(`common.${unit}`),
+                  })}
+                </label>
+                <input
+                  id="pumping-right-volume"
+                  type="number"
+                  min={0}
+                  max={2000}
+                  step="any"
+                  value={rightVolumeStr}
+                  onChange={(e) =>
+                    handleSideVolumeChange(leftVolumeStr, e.target.value)
+                  }
+                  className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div
+          className={
+            isEditingActive
+              ? 'grid grid-cols-1 gap-3'
+              : 'grid grid-cols-1 gap-3 sm:grid-cols-2'
+          }
+        >
+          <div>
+            <label
+              htmlFor="pumping-start"
+              className="mb-1 block text-sm font-medium"
+            >
+              {t('modals.pumping.startTime')}
+            </label>
+            <input
+              id="pumping-start"
+              type="datetime-local"
+              required
+              disabled={Boolean(finishingActive)}
+              value={startedLocal}
+              onChange={(e) => setStartedLocal(e.target.value)}
+              className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950"
+            />
+          </div>
+          {!isEditingActive && (
+            <div>
+              <label
+                htmlFor="pumping-end"
+                className="mb-1 block text-sm font-medium"
+              >
+                {t('modals.pumping.endTime')}
+              </label>
+              <input
+                id="pumping-end"
+                type="datetime-local"
+                required
+                value={endedLocal}
+                onChange={(e) => setEndedLocal(e.target.value)}
+                className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+              />
+            </div>
+          )}
+        </div>
+
+        <div>
+          <label
+            htmlFor="pumping-notes"
+            className="mb-1 block text-sm font-medium"
+          >
+            {t('common.notes')}
+          </label>
+          <textarea
+            id="pumping-notes"
+            rows={2}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder={t('modals.pumping.notesPlaceholder')}
+            className="bt-focus-ring w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+          />
+        </div>
+
+        {error && (
+          <p className="text-sm text-rose-600 dark:text-rose-400">{error}</p>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="bt-focus-ring min-h-[44px] rounded-xl border border-slate-300 px-4 text-sm font-medium dark:border-slate-700"
+          >
+            {t('common.cancel')}
+          </button>
+          <button
+            type="submit"
+            disabled={saving}
+            className="bt-focus-ring min-h-[44px] rounded-xl bg-purple-600 px-5 text-sm font-semibold text-white hover:bg-purple-700 disabled:opacity-60"
+          >
+            {saving ? t('common.saving') : t('modals.pumping.savePumping')}
+          </button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
+// ============================================================================
+// Tummy Time Modal (Manual Entry or Edit)
+// ============================================================================
+
+const TUMMY_MOOD_VALUES: readonly TummyTimeMood[] = [
+  'happy',
+  'neutral',
+  'fussy',
+];
+
+export function TummyTimeModal({
+  babyId,
+  userId,
+  userName,
+  existing,
+  onClose,
+}: {
+  babyId: string;
+  userId: string;
+  userName: string | null;
+  existing?: TummyTimeEvent;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const isEditingActive = Boolean(existing && existing.endedAt === null);
+  const [{ initialStartedLocal, initialEndedLocal }] = useState(() => {
+    const nowMs = Date.now();
+    const nowStr = toLocalDateTimeInputValue(new Date(nowMs).toISOString());
+    const defaultStartStr = toLocalDateTimeInputValue(
+      new Date(nowMs - 5 * 60 * 1000).toISOString(),
+    );
+    return {
+      initialStartedLocal: existing
+        ? toLocalDateTimeInputValue(existing.startedAt)
+        : defaultStartStr,
+      initialEndedLocal: existing?.endedAt
+        ? toLocalDateTimeInputValue(existing.endedAt)
+        : nowStr,
+    };
+  });
+
+  const [startedLocal, setStartedLocal] = useState(initialStartedLocal);
+  const [endedLocal, setEndedLocal] = useState(initialEndedLocal);
+  const [mood, setMood] = useState<TummyTimeMood | undefined>(
+    existing?.payload.mood,
+  );
+  const [notes, setNotes] = useState(existing?.notes ?? '');
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSaving(true);
+    try {
+      const startedAtIso =
+        existing && startedLocal === initialStartedLocal
+          ? existing.startedAt
+          : fromLocalDateTimeInputValue(startedLocal);
+      const trimmedNotes = notes.trim() ? notes.trim() : null;
+
+      if (existing) {
+        const endedAtIso = isEditingActive
+          ? null
+          : existing.endedAt && endedLocal === initialEndedLocal
+            ? existing.endedAt
+            : fromLocalDateTimeInputValue(endedLocal);
+
+        if (
+          endedAtIso !== null &&
+          Date.parse(endedAtIso) < Date.parse(startedAtIso)
+        ) {
+          setError(t('modals.tummy.endBeforeStart'));
+          return;
+        }
+
+        await updateEvent(existing.id, (prev) => {
+          if (prev.type !== 'tummy_time') {
+            throw new Error('Expected tummy_time event');
+          }
+          return {
+            ...prev,
+            startedAt: startedAtIso,
+            endedAt: endedAtIso,
+            notes: trimmedNotes,
+            updatedByUserId: userId,
+            payload: {
+              ...(mood !== undefined ? { mood } : {}),
+            },
+          };
+        });
+      } else {
+        const endedAtIso = fromLocalDateTimeInputValue(endedLocal);
+        if (Date.parse(endedAtIso) <= Date.parse(startedAtIso)) {
+          setError(t('modals.tummy.endBeforeStart'));
+          return;
+        }
+
+        await logTummyTime({
+          babyId,
+          userId,
+          userName,
+          startedAt: startedAtIso,
+          endedAt: endedAtIso,
+          mood,
+          notes: trimmedNotes,
+        });
+      }
+      onClose();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : t('modals.tummy.saveFailed'),
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <ModalShell
+      title={
+        existing ? t('modals.tummy.editTitle') : t('modals.tummy.logTitle')
+      }
+      accentClass="bt-card-tummy"
+      onClose={onClose}
+    >
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div
+          className={
+            isEditingActive
+              ? 'grid grid-cols-1 gap-3'
+              : 'grid grid-cols-1 gap-3 sm:grid-cols-2'
+          }
+        >
+          <div>
+            <label
+              htmlFor="tummy-start"
+              className="mb-1 block text-sm font-medium"
+            >
+              {t('modals.tummy.startTime')}
+            </label>
+            <input
+              id="tummy-start"
+              type="datetime-local"
+              required
+              value={startedLocal}
+              onChange={(e) => setStartedLocal(e.target.value)}
+              className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+            />
+          </div>
+          {!isEditingActive && (
+            <div>
+              <label
+                htmlFor="tummy-end"
+                className="mb-1 block text-sm font-medium"
+              >
+                {t('modals.tummy.endTime')}
+              </label>
+              <input
+                id="tummy-end"
+                type="datetime-local"
+                required
+                value={endedLocal}
+                onChange={(e) => setEndedLocal(e.target.value)}
+                className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+              />
+            </div>
+          )}
+        </div>
+
+        <div>
+          <span className="mb-1.5 block text-sm font-medium">
+            {t('modals.tummy.mood')}
+          </span>
+          <div className="grid grid-cols-3 gap-2">
+            {TUMMY_MOOD_VALUES.map((m) => (
+              <button
+                key={m}
+                type="button"
+                aria-pressed={mood === m}
+                onClick={() => setMood((prev) => (prev === m ? undefined : m))}
+                className={`bt-focus-ring min-h-[44px] rounded-xl border text-sm font-semibold transition ${
+                  mood === m
+                    ? 'border-orange-600 bg-orange-50 text-orange-700 dark:bg-orange-950 dark:text-orange-200'
+                    : 'border-slate-200 text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                }`}
+              >
+                {t(`modals.tummy.mood.${m}`)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <label
+            htmlFor="tummy-notes"
+            className="mb-1 block text-sm font-medium"
+          >
+            {t('common.notes')}
+          </label>
+          <textarea
+            id="tummy-notes"
+            rows={2}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder={t('modals.tummy.notesPlaceholder')}
+            className="bt-focus-ring w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+          />
+        </div>
+
+        {error && (
+          <p className="text-sm text-rose-600 dark:text-rose-400">{error}</p>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="bt-focus-ring min-h-[44px] rounded-xl border border-slate-300 px-4 text-sm font-medium dark:border-slate-700"
+          >
+            {t('common.cancel')}
+          </button>
+          <button
+            type="submit"
+            disabled={saving}
+            className="bt-focus-ring min-h-[44px] rounded-xl bg-orange-600 px-5 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-60"
+          >
+            {saving ? t('common.saving') : t('modals.tummy.saveTummyTime')}
           </button>
         </div>
       </form>

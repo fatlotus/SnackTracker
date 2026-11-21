@@ -46,8 +46,10 @@ import {
   BottleFeedModal,
   BreastFeedModal,
   DiaperModal,
+  PumpingModal,
   SleepModal,
   SpitUpModal,
+  TummyTimeModal,
 } from './components/TrackingModals.js';
 import { TrendsView } from './components/TrendsView.js';
 import {
@@ -123,6 +125,8 @@ export function App() {
     breastFeed: null,
     bottleFeed: null,
     sleep: null,
+    pumping: null,
+    tummyTime: null,
   });
 
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
@@ -209,7 +213,13 @@ export function App() {
       setTimers(activeTimers);
     } else {
       setEvents([]);
-      setTimers({ breastFeed: null, bottleFeed: null, sleep: null });
+      setTimers({
+        breastFeed: null,
+        bottleFeed: null,
+        sleep: null,
+        pumping: null,
+        tummyTime: null,
+      });
     }
   }, [handleSelectBaby]);
 
@@ -307,7 +317,11 @@ export function App() {
 
   // Live 1s timer tick when any timer is active; 15s otherwise
   const hasActiveTimer = Boolean(
-    timers.breastFeed || timers.bottleFeed || timers.sleep,
+    timers.breastFeed ||
+      timers.bottleFeed ||
+      timers.sleep ||
+      timers.pumping ||
+      timers.tummyTime,
   );
   useEffect(() => {
     const intervalMs = hasActiveTimer ? 1000 : 15_000;
@@ -330,7 +344,13 @@ export function App() {
       setUser(null);
       setBabies([]);
       setEvents([]);
-      setTimers({ breastFeed: null, bottleFeed: null, sleep: null });
+      setTimers({
+        breastFeed: null,
+        bottleFeed: null,
+        sleep: null,
+        pumping: null,
+        tummyTime: null,
+      });
     } catch (err) {
       setActionError(
         err instanceof Error ? err.message : t('app.signOutFailed'),
@@ -662,6 +682,9 @@ export function App() {
           onFinishBottle={(ev) =>
             setModal({ kind: 'bottle_finish', event: ev })
           }
+          onFinishPumping={(ev) =>
+            setModal({ kind: 'pumping_finish', event: ev })
+          }
         />
 
         {errorBanners}
@@ -834,6 +857,33 @@ export function App() {
           onClose={() => setModal(null)}
         />
       )}
+      {modal?.kind === 'pumping_manual' && (
+        <PumpingModal
+          babyId={activeBaby.id}
+          userId={user.id}
+          userName={user.displayName}
+          volumeUnit={volumeUnit}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal?.kind === 'pumping_finish' && (
+        <PumpingModal
+          babyId={activeBaby.id}
+          userId={user.id}
+          userName={user.displayName}
+          volumeUnit={volumeUnit}
+          finishingActive={modal.event}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal?.kind === 'tummy_time_manual' && (
+        <TummyTimeModal
+          babyId={activeBaby.id}
+          userId={user.id}
+          userName={user.displayName}
+          onClose={() => setModal(null)}
+        />
+      )}
       {modal?.kind === 'edit' && modal.event.type === 'breast_feed' && (
         <BreastFeedModal
           babyId={activeBaby.id}
@@ -877,6 +927,25 @@ export function App() {
           userId={user.id}
           userName={user.displayName}
           recentEvents={events}
+          existing={modal.event}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal?.kind === 'edit' && modal.event.type === 'pumping' && (
+        <PumpingModal
+          babyId={activeBaby.id}
+          userId={user.id}
+          userName={user.displayName}
+          volumeUnit={volumeUnit}
+          existing={modal.event}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal?.kind === 'edit' && modal.event.type === 'tummy_time' && (
+        <TummyTimeModal
+          babyId={activeBaby.id}
+          userId={user.id}
+          userName={user.displayName}
           existing={modal.event}
           onClose={() => setModal(null)}
         />
