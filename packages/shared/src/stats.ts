@@ -5,11 +5,15 @@ import type {
   DiaperEvent,
   DiaperKind,
   MilkType,
+  PumpingEvent,
+  PumpingSide,
   SleepCategory,
   SleepEvent,
   SpitUpEvent,
   SpitUpSeverity,
   TrackingEvent,
+  TummyTimeEvent,
+  TummyTimeMood,
   VitaminEvent,
 } from './schemas.js';
 
@@ -267,6 +271,15 @@ export interface DailyStats {
   // Vitamins
   vitaminCount: number;
   vitaminGiven: boolean;
+
+  // Pumping
+  pumpingCount: number;
+  pumpingTotalSeconds: number;
+  pumpingTotalMl: number;
+
+  // Tummy Time
+  tummyTimeCount: number;
+  tummyTimeTotalSeconds: number;
 }
 
 export function createEmptyDailyStats(dateKey: string): DailyStats {
@@ -304,6 +317,11 @@ export function createEmptyDailyStats(dateKey: string): DailyStats {
     standaloneSpitUpCount: 0,
     vitaminCount: 0,
     vitaminGiven: false,
+    pumpingCount: 0,
+    pumpingTotalSeconds: 0,
+    pumpingTotalMl: 0,
+    tummyTimeCount: 0,
+    tummyTimeTotalSeconds: 0,
   };
 }
 
@@ -480,6 +498,29 @@ export function computeDailyStats(
         }
         break;
       }
+
+      case 'pumping': {
+        const secs = overlapSeconds(startMs, endMs, dayStartMs, dayEndMs);
+        if (secs > 0) {
+          stats.pumpingTotalSeconds += secs;
+        }
+        if (startsOnDay) {
+          stats.pumpingCount += 1;
+          stats.pumpingTotalMl += event.payload.volumeMl ?? 0;
+        }
+        break;
+      }
+
+      case 'tummy_time': {
+        const secs = overlapSeconds(startMs, endMs, dayStartMs, dayEndMs);
+        if (secs > 0) {
+          stats.tummyTimeTotalSeconds += secs;
+        }
+        if (startsOnDay) {
+          stats.tummyTimeCount += 1;
+        }
+        break;
+      }
     }
   }
 
@@ -534,6 +575,11 @@ export interface PeriodMetrics {
   rashCount: number;
   spitUpCount: number;
   vitaminDaysCount: number;
+  pumpingCount: number;
+  pumpingTotalSeconds: number;
+  pumpingTotalMl: number;
+  tummyTimeCount: number;
+  tummyTimeTotalSeconds: number;
 }
 
 export interface PeriodAverages {
@@ -563,6 +609,11 @@ function createEmptyMetrics(): PeriodMetrics {
     rashCount: 0,
     spitUpCount: 0,
     vitaminDaysCount: 0,
+    pumpingCount: 0,
+    pumpingTotalSeconds: 0,
+    pumpingTotalMl: 0,
+    tummyTimeCount: 0,
+    tummyTimeTotalSeconds: 0,
   };
 }
 
@@ -597,6 +648,11 @@ export function computePeriodAverages(
     if (day.vitaminGiven) {
       totals.vitaminDaysCount += 1;
     }
+    totals.pumpingCount += day.pumpingCount;
+    totals.pumpingTotalSeconds += day.pumpingTotalSeconds;
+    totals.pumpingTotalMl += day.pumpingTotalMl;
+    totals.tummyTimeCount += day.tummyTimeCount;
+    totals.tummyTimeTotalSeconds += day.tummyTimeTotalSeconds;
   }
 
   const divisor = days > 0 ? days : 1;
@@ -620,6 +676,11 @@ export function computePeriodAverages(
     rashCount: totals.rashCount / divisor,
     spitUpCount: totals.spitUpCount / divisor,
     vitaminDaysCount: totals.vitaminDaysCount / divisor,
+    pumpingCount: totals.pumpingCount / divisor,
+    pumpingTotalSeconds: totals.pumpingTotalSeconds / divisor,
+    pumpingTotalMl: totals.pumpingTotalMl / divisor,
+    tummyTimeCount: totals.tummyTimeCount / divisor,
+    tummyTimeTotalSeconds: totals.tummyTimeTotalSeconds / divisor,
   };
 
   return { days, totals, averagesPerDay };
@@ -671,6 +732,17 @@ export interface LastVitaminSummary {
   secondsSinceStart: number;
 }
 
+export interface LastPumpingSummary extends LastTimedActivity<PumpingEvent> {
+  volumeMl: number | null;
+  side: PumpingSide | null;
+  durationSeconds: number;
+}
+
+export interface LastTummyTimeSummary extends LastTimedActivity<TummyTimeEvent> {
+  mood: TummyTimeMood | null;
+  durationSeconds: number;
+}
+
 export interface LastActivitySummary {
   lastFeed:
     | (LastTimedActivity<BreastFeedEvent | BottleFeedEvent> & {
@@ -683,6 +755,8 @@ export interface LastActivitySummary {
   lastDiaper: LastDiaperSummary | null;
   lastSpitUp: LastSpitUpSummary | null;
   lastVitamin: LastVitaminSummary | null;
+  lastPumping: LastPumpingSummary | null;
+  lastTummyTime: LastTummyTimeSummary | null;
 }
 
 function buildTimedActivity<T extends TrackingEvent>(
@@ -700,6 +774,13 @@ function buildTimedActivity<T extends TrackingEvent>(
     secondsSinceStart: Math.max(0, (nowMs - startMs) / 1000),
     secondsSinceEnd: isOngoing ? 0 : Math.max(0, (nowMs - endMs) / 1000),
   };
+}
+
+function getTimedDurationSeconds(event: TrackingEvent, nowMs: number): number {
+  const startMs = Date.parse(event.startedAt);
+  const endMs =
+    event.endedAt !== null ? Date.parse(event.endedAt) : Math.max(startMs, nowMs);
+  return Math.max(0, (endMs - startMs) / 1000);
 }
 
 function getLastSideFromBreastEvent(event: BreastFeedEvent): BreastSide | null {
@@ -749,6 +830,8 @@ export function computeLastActivitySummary(
   let lastDiaper: LastDiaperSummary | null = null;
   let lastSpitUp: LastSpitUpSummary | null = null;
   let lastVitamin: LastVitaminSummary | null = null;
+  let lastPumping: LastPumpingSummary | null = null;
+  let lastTummyTime: LastTummyTimeSummary | null = null;
   let lastFeed: LastActivitySummary['lastFeed'] = null;
 
   for (const event of sorted) {
@@ -804,6 +887,19 @@ export function computeLastActivitySummary(
         startedAt: event.startedAt,
         secondsSinceStart: Math.max(0, (nowMs - Date.parse(event.startedAt)) / 1000),
       };
+    } else if (event.type === 'pumping' && !lastPumping) {
+      lastPumping = {
+        ...buildTimedActivity(event, nowMs),
+        volumeMl: event.payload.volumeMl,
+        side: event.payload.side ?? null,
+        durationSeconds: getTimedDurationSeconds(event, nowMs),
+      };
+    } else if (event.type === 'tummy_time' && !lastTummyTime) {
+      lastTummyTime = {
+        ...buildTimedActivity(event, nowMs),
+        mood: event.payload.mood ?? null,
+        durationSeconds: getTimedDurationSeconds(event, nowMs),
+      };
     }
 
     if (
@@ -813,7 +909,9 @@ export function computeLastActivitySummary(
       lastSleep &&
       lastDiaper &&
       lastSpitUp &&
-      lastVitamin
+      lastVitamin &&
+      lastPumping &&
+      lastTummyTime
     ) {
       break;
     }
@@ -827,6 +925,8 @@ export function computeLastActivitySummary(
     lastDiaper,
     lastSpitUp,
     lastVitamin,
+    lastPumping,
+    lastTummyTime,
   };
 }
 

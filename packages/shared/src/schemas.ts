@@ -244,6 +244,25 @@ export type SpitUpPayload = z.infer<typeof SpitUpPayloadSchema>;
 export const VitaminPayloadSchema = z.object({});
 export type VitaminPayload = z.infer<typeof VitaminPayloadSchema>;
 
+export const PumpingSideSchema = z.enum(['left', 'right', 'both']);
+export type PumpingSide = z.infer<typeof PumpingSideSchema>;
+
+export const PumpingPayloadSchema = z.object({
+  side: PumpingSideSchema.optional(),
+  volumeMl: z.number().nonnegative().max(2000).nullable(),
+  leftVolumeMl: z.number().nonnegative().max(2000).nullable().optional(),
+  rightVolumeMl: z.number().nonnegative().max(2000).nullable().optional(),
+});
+export type PumpingPayload = z.infer<typeof PumpingPayloadSchema>;
+
+export const TummyTimeMoodSchema = z.enum(['happy', 'neutral', 'fussy']);
+export type TummyTimeMood = z.infer<typeof TummyTimeMoodSchema>;
+
+export const TummyTimePayloadSchema = z.object({
+  mood: TummyTimeMoodSchema.optional(),
+});
+export type TummyTimePayload = z.infer<typeof TummyTimePayloadSchema>;
+
 const baseEventFields = {
   id: uuidSchema,
   babyId: uuidSchema,
@@ -301,6 +320,20 @@ export const VitaminEventSchema = z.object({
 });
 export type VitaminEvent = z.infer<typeof VitaminEventSchema>;
 
+export const PumpingEventSchema = z.object({
+  ...baseEventFields,
+  type: z.literal('pumping'),
+  payload: PumpingPayloadSchema,
+});
+export type PumpingEvent = z.infer<typeof PumpingEventSchema>;
+
+export const TummyTimeEventSchema = z.object({
+  ...baseEventFields,
+  type: z.literal('tummy_time'),
+  payload: TummyTimePayloadSchema,
+});
+export type TummyTimeEvent = z.infer<typeof TummyTimeEventSchema>;
+
 export const TrackingEventTypeSchema = z.enum([
   'breast_feed',
   'bottle_feed',
@@ -308,6 +341,8 @@ export const TrackingEventTypeSchema = z.enum([
   'diaper',
   'spit_up',
   'vitamin',
+  'pumping',
+  'tummy_time',
 ]);
 export type TrackingEventType = z.infer<typeof TrackingEventTypeSchema>;
 
@@ -319,6 +354,8 @@ export const TrackingEventSchema = z
     DiaperEventSchema,
     SpitUpEventSchema,
     VitaminEventSchema,
+    PumpingEventSchema,
+    TummyTimeEventSchema,
   ])
   .superRefine((event, ctx) => {
     if (event.endedAt !== null) {

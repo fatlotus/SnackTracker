@@ -71,6 +71,10 @@ const EVENTS_CSV_HEADERS = [
   'hasRash',
   'spitUpSeverity',
   'relatedFeedId',
+  'pumpingSide',
+  'pumpingLeftMl',
+  'pumpingRightMl',
+  'tummyTimeMood',
   'notes',
   'loggedBy',
 ] as const;
@@ -129,6 +133,10 @@ export function exportEventsToCsv(
     let hasRash: string | boolean = '';
     let spitUpSeverity = '';
     let relatedFeedId = '';
+    let pumpingSide = '';
+    let pumpingLeftMl: string | number = '';
+    let pumpingRightMl: string | number = '';
+    let tummyTimeMood = '';
 
     switch (event.type) {
       case 'breast_feed':
@@ -158,6 +166,22 @@ export function exportEventsToCsv(
         break;
       case 'vitamin':
         break;
+      case 'pumping':
+        volumeMl =
+          event.payload.volumeMl === null ? '' : String(event.payload.volumeMl);
+        pumpingSide = event.payload.side ?? '';
+        pumpingLeftMl =
+          event.payload.leftVolumeMl == null
+            ? ''
+            : String(event.payload.leftVolumeMl);
+        pumpingRightMl =
+          event.payload.rightVolumeMl == null
+            ? ''
+            : String(event.payload.rightVolumeMl);
+        break;
+      case 'tummy_time':
+        tummyTimeMood = event.payload.mood ?? '';
+        break;
     }
 
     lines.push(
@@ -181,6 +205,10 @@ export function exportEventsToCsv(
         hasRash,
         spitUpSeverity,
         relatedFeedId,
+        pumpingSide,
+        pumpingLeftMl,
+        pumpingRightMl,
+        tummyTimeMood,
         event.notes ?? '',
         event.loggedByName ?? event.loggedByUserId,
       ]),
@@ -208,6 +236,11 @@ const DAILY_STATS_CSV_HEADERS = [
   'rashCount',
   'spitUpCount',
   'vitaminGiven',
+  'pumpingSessions',
+  'pumpingMinutes',
+  'pumpingTotalMl',
+  'tummyTimeSessions',
+  'tummyTimeMinutes',
 ] as const;
 
 export function exportDailyStatsToCsv(
@@ -239,6 +272,11 @@ export function exportDailyStatsToCsv(
         day.rashCount,
         day.spitUpCount,
         day.vitaminGiven,
+        day.pumpingCount,
+        roundMinutes(day.pumpingTotalSeconds),
+        day.pumpingTotalMl,
+        day.tummyTimeCount,
+        roundMinutes(day.tummyTimeTotalSeconds),
       ]),
     );
   }
@@ -412,6 +450,8 @@ export function generatePediatricianSummary(
     `Diapers: ${totals.diaperEventCount} changes — ${totals.wetCount} wet (${averagesPerDay.wetCount.toFixed(1)}/day), ${totals.poopyCount} poopy (${averagesPerDay.poopyCount.toFixed(1)}/day), ${totals.bothCount} both${totals.rashCount > 0 ? `, ${totals.rashCount} rash flag(s)` : ''}`,
     `Spit-Up: ${totals.spitUpCount} total (${averagesPerDay.spitUpCount.toFixed(1)}/day avg)`,
     `Vitamins: ${totals.vitaminDaysCount}/${days} day${days === 1 ? '' : 's'} given`,
+    `Pumping: ${totals.pumpingCount} sessions (${Math.round(totals.pumpingTotalMl)} ml total, ${Math.round(averagesPerDay.pumpingTotalMl)} ml/day avg; ${formatHoursMinutes(totals.pumpingTotalSeconds)} total)`,
+    `Tummy Time: ${formatHoursMinutes(totals.tummyTimeTotalSeconds)} total (${formatHoursMinutes(averagesPerDay.tummyTimeTotalSeconds)}/day avg; ${totals.tummyTimeCount} sessions)`,
   ];
 
   for (const row of summaryRows) {
@@ -422,7 +462,7 @@ export function generatePediatricianSummary(
   lines.push(isMd ? '## Day-by-Day Breakdown' : 'DAY-BY-DAY BREAKDOWN');
 
   for (const day of dailyStats) {
-    const dayLine = `${day.dateKey}: Sleep ${formatHoursMinutes(day.totalSleepSeconds)}, Feeds ${day.totalFeedCount} (Breast ${formatHoursMinutes(day.breastTotalSeconds)}, Bottle ${Math.round(day.bottleTotalMl)} ml), Diapers ${day.wetCount}W/${day.poopyCount}P, Spit-ups ${day.spitUpCount}, Vitamins ${day.vitaminGiven ? 'Yes' : 'No'}`;
+    const dayLine = `${day.dateKey}: Sleep ${formatHoursMinutes(day.totalSleepSeconds)}, Feeds ${day.totalFeedCount} (Breast ${formatHoursMinutes(day.breastTotalSeconds)}, Bottle ${Math.round(day.bottleTotalMl)} ml), Diapers ${day.wetCount}W/${day.poopyCount}P, Spit-ups ${day.spitUpCount}, Vitamins ${day.vitaminGiven ? 'Yes' : 'No'}, Pumping ${day.pumpingCount} (${Math.round(day.pumpingTotalMl)} ml), Tummy Time ${formatHoursMinutes(day.tummyTimeTotalSeconds)} (${day.tummyTimeCount})`;
     lines.push(isMd ? `- ${dayLine}` : `  ${dayLine}`);
   }
 

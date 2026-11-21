@@ -261,6 +261,120 @@ describe('TrackingEventSchema', () => {
     });
     expect(invalid.success).toBe(false);
   });
+
+  it('validates pumping events including 0 ml, null ml, per-side volumes, and rejects invalid bounds', () => {
+    expect(
+      TrackingEventSchema.safeParse({
+        ...base,
+        type: 'pumping',
+        startedAt: TS_1,
+        endedAt: TS_2,
+        payload: {
+          side: 'both',
+          volumeMl: 120,
+          leftVolumeMl: 55,
+          rightVolumeMl: 65,
+        },
+      }).success,
+    ).toBe(true);
+
+    // Explicit 0 ml and null ml are both valid
+    expect(
+      TrackingEventSchema.safeParse({
+        ...base,
+        type: 'pumping',
+        startedAt: TS_1,
+        endedAt: TS_2,
+        payload: { side: 'left', volumeMl: 0 },
+      }).success,
+    ).toBe(true);
+    expect(
+      TrackingEventSchema.safeParse({
+        ...base,
+        type: 'pumping',
+        startedAt: TS_1,
+        endedAt: null,
+        payload: { volumeMl: null },
+      }).success,
+    ).toBe(true);
+
+    // Reject negative or > 2000 ml, invalid side, or endedAt < startedAt
+    expect(
+      TrackingEventSchema.safeParse({
+        ...base,
+        type: 'pumping',
+        startedAt: TS_1,
+        endedAt: TS_2,
+        payload: { volumeMl: -1 },
+      }).success,
+    ).toBe(false);
+    expect(
+      TrackingEventSchema.safeParse({
+        ...base,
+        type: 'pumping',
+        startedAt: TS_1,
+        endedAt: TS_2,
+        payload: { volumeMl: 2001 },
+      }).success,
+    ).toBe(false);
+    expect(
+      TrackingEventSchema.safeParse({
+        ...base,
+        type: 'pumping',
+        startedAt: TS_1,
+        endedAt: TS_2,
+        payload: { side: 'middle', volumeMl: 50 },
+      }).success,
+    ).toBe(false);
+    expect(
+      TrackingEventSchema.safeParse({
+        ...base,
+        type: 'pumping',
+        startedAt: TS_2,
+        endedAt: TS_1,
+        payload: { volumeMl: 50 },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('validates tummy_time events with optional mood and rejects invalid mood or endedAt < startedAt', () => {
+    expect(
+      TrackingEventSchema.safeParse({
+        ...base,
+        type: 'tummy_time',
+        startedAt: TS_1,
+        endedAt: TS_2,
+        payload: { mood: 'happy' },
+      }).success,
+    ).toBe(true);
+    expect(
+      TrackingEventSchema.safeParse({
+        ...base,
+        type: 'tummy_time',
+        startedAt: TS_1,
+        endedAt: null,
+        payload: {},
+      }).success,
+    ).toBe(true);
+    expect(
+      TrackingEventSchema.safeParse({
+        ...base,
+        type: 'tummy_time',
+        startedAt: TS_1,
+        endedAt: TS_2,
+        payload: { mood: 'sleepy' },
+      }).success,
+    ).toBe(false);
+    expect(
+      TrackingEventSchema.safeParse({
+        ...base,
+        type: 'tummy_time',
+        startedAt: TS_2,
+        endedAt: TS_1,
+        payload: {},
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe('sync & healthz schemas', () => {

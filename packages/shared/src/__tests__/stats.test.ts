@@ -548,4 +548,127 @@ describe('range stats, period averages, last activity, and day events', () => {
     expect(missingSideSummary.lastBreastFeed?.durationSeconds).toBe(600);
     expect(missingSideSummary.lastBreastFeed?.secondsSinceEnd).toBe(20 * 60);
   });
+
+  it('computes pumping and tummy_time daily stats with midnight splitting, ongoing timer clamping, and keeps totalFeedCount unaffected', () => {
+    const tz = 'UTC';
+    const pumpCrossingMidnight: TrackingEvent = {
+      ...makeBase('2026-06-14T23:50:00.000Z', '2026-06-15T00:10:00.000Z'),
+      type: 'pumping',
+      payload: { side: 'both', volumeMl: 140, leftVolumeMl: 70, rightVolumeMl: 70 },
+    };
+    const ongoingPump: TrackingEvent = {
+      ...makeBase('2026-06-15T08:00:00.000Z', null),
+      type: 'pumping',
+      payload: { side: 'left', volumeMl: null },
+    };
+    const deletedPump: TrackingEvent = {
+      ...makeBase('2026-06-15T07:00:00.000Z', '2026-06-15T07:15:00.000Z'),
+      deletedAt: '2026-06-15T07:20:00.000Z',
+      type: 'pumping',
+      payload: { side: 'right', volumeMl: 90 },
+    };
+    const tummyCrossingMidnight: TrackingEvent = {
+      ...makeBase('2026-06-14T23:57:00.000Z', '2026-06-15T00:03:00.000Z'),
+      type: 'tummy_time',
+      payload: { mood: 'happy' },
+    };
+    const ongoingTummy: TrackingEvent = {
+      ...makeBase('2026-06-15T08:05:00.000Z', null),
+      type: 'tummy_time',
+      payload: {},
+    };
+
+    const nowMs = Date.parse('2026-06-15T08:10:00.000Z');
+    const allEvents = [
+      pumpCrossingMidnight,
+      ongoingPump,
+      deletedPump,
+      tummyCrossingMidnight,
+      ongoingTummy,
+    ];
+
+    const day1 = computeDailyStats(allEvents, '2026-06-14', tz, nowMs);
+    expect(day1.pumpingCount).toBe(1);
+    expect(day1.pumpingTotalMl).toBe(140);
+    expect(day1.pumpingTotalSeconds).toBe(600); // 10m before midnight
+    expect(day1.totalFeedCount).toBe(0); // pumping does NOT increment totalFeedCount
+    expect(day1.tummyTimeCount).toBe(1);
+    expect(day1.tummyTimeTotalSeconds).toBe(180); // 3m before midnight
+
+    const day2 = computeDailyStats(allEvents, '2026-06-15', tz, nowMs);
+    expect(day2.pumpingCount).toBe(1); // only ongoingPump started on day 2 (deletedPump excluded)
+    expect(day2.pumpingTotalMl).toBe(0);
+    expect(day2.pumpingTotalSeconds).toBe(600 + 600); // 10m spillover + 10m ongoing
+    expect(day2.totalFeedCount).toBe(0);
+    expect(day2.tummyTimeCount).toBe(1);
+    expect(day2.tummyTimeTotalSeconds).toBe(180 + 300); // 3m spillover + 5m ongoing
+
+    const period = computePeriodAverages([day1, day2]);
+    expect(period.totals.pumpingCount).toBe(2);
+    expect(period.totals.pumpingTotalMl).toBe(140);
+    expect(period.totals.pumpingTotalSeconds).toBe(1800);
+    expect(period.averagesPerDay.pumpingTotalMl).toBe(70);
+    expect(period.totals.tummyTimeCount).toBe(2);
+    expect(period.totals.tummyTimeTotalSeconds).toBe(660);
+    expect(period.averagesPerDay.tummyTimeTotalSeconds).toBe(330);
+  });
+
+  it('finds lastPumping and lastTummyTime in computeLastActivitySummary even when all other 6 categories are newer', () => {
+    const nowMs = Date.parse('2026-06-15T18:00:00.000Z');
+    const olderPump: TrackingEvent = {
+      ...makeBase('2026-06-15T06:00:00.000Z', '2026-06-15T06:15:00.000Z'),
+      type: 'pumping',
+      payload: { side: 'both', volumeMl: 110 },
+    };
+    const olderTummy: TrackingEvent = {
+      ...makeBase('2026-06-15T07:00:00.000Z', '2026-06-15T07:05:00.000Z'),
+      type: 'tummy_time',
+      payload: { mood: 'neutral' },
+    };
+    const newerEvents: TrackingEvent[] = [
+      {
+        ...makeBase('2026-06-15T12:00:00.000Z', '2026-06-15T12:10:00.000Z'),
+        type: 'breast_feed',
+        payload: { segments: [], pausedAt: null, totalLeftSeconds: 600, totalRightSeconds: 0 },
+      },
+      {
+        ...makeBase('2026-06-15T13:00:00.000Z', '2026-06-15T13:10:00.000Z'),
+        type: 'bottle_feed',
+        payload: { volumeMl: 90, milkType: 'formula' },
+      },
+      {
+        ...makeBase('2026-06-15T14:00:00.000Z', '2026-06-15T15:00:00.000Z'),
+        type: 'sleep',
+        payload: { category: 'nap' },
+      },
+      {
+        ...makeBase('2026-06-15T15:10:00.000Z', '2026-06-15T15:10:00.000Z'),
+        type: 'diaper',
+        payload: { kind: 'wet' },
+      },
+      {
+        ...makeBase('2026-06-15T15:20:00.000Z', '2026-06-15T15:20:00.000Z'),
+        type: 'spit_up',
+        payload: { severity: 'small' },
+      },
+      {
+        ...makeBase('2026-06-15T15:30:00.000Z', '2026-06-15T15:30:00.000Z'),
+        type: 'vitamin',
+        payload: {},
+      },
+    ];
+
+    const summary = computeLastActivitySummary(
+      [olderPump, olderTummy, ...newerEvents],
+      nowMs,
+    );
+    expect(summary.lastPumping?.event.id).toBe(olderPump.id);
+    expect(summary.lastPumping?.volumeMl).toBe(110);
+    expect(summary.lastPumping?.side).toBe('both');
+    expect(summary.lastPumping?.durationSeconds).toBe(900);
+
+    expect(summary.lastTummyTime?.event.id).toBe(olderTummy.id);
+    expect(summary.lastTummyTime?.mood).toBe('neutral');
+    expect(summary.lastTummyTime?.durationSeconds).toBe(300);
+  });
 });

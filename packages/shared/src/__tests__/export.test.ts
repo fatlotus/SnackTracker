@@ -336,8 +336,8 @@ describe('JSON & pediatrician summary exporters', () => {
     const dailyCsv = exportDailyStatsToCsv(dailyStats, true);
     expect(dailyCsv).toContain('vitaminGiven');
     expect(dailyCsv).toContain('2026-06-01,');
-    expect(dailyCsv.split('\r\n')[1]!.endsWith(',true')).toBe(true);
-    expect(dailyCsv.split('\r\n')[2]!.endsWith(',false')).toBe(true);
+    expect(dailyCsv.split('\r\n')[1]!.endsWith(',true,0,0.0,0,0,0.0')).toBe(true);
+    expect(dailyCsv.split('\r\n')[2]!.endsWith(',false,0,0.0,0,0,0.0')).toBe(true);
 
     const summary = generatePediatricianSummary({
       baby,
@@ -350,5 +350,96 @@ describe('JSON & pediatrician summary exporters', () => {
     expect(summary).toContain('Vitamins: 1/2 days given');
     expect(summary).toContain('2026-06-01: Sleep 0h 0m, Feeds 0 (Breast 0h 0m, Bottle 0 ml), Diapers 0W/0P, Spit-ups 0, Vitamins Yes');
     expect(summary).toContain('2026-06-02: Sleep 0h 0m, Feeds 0 (Breast 0h 0m, Bottle 0 ml), Diapers 0W/0P, Spit-ups 0, Vitamins No');
+  });
+
+  it('exports pumping and tummy_time events in CSV, daily stats CSV, JSON, and pediatrician summary', () => {
+    const pumpingZero: TrackingEvent = {
+      id: '44444444-4444-4444-8444-444444444401',
+      babyId: BABY_ID,
+      type: 'pumping',
+      startedAt: '2026-06-01T10:00:00.000Z',
+      endedAt: '2026-06-01T10:15:00.000Z',
+      notes: '=SUM(A1:A2)',
+      loggedByUserId: USER_ID,
+      loggedByName: 'Alex',
+      updatedByUserId: USER_ID,
+      createdAt: '2026-06-01T10:00:00.000Z',
+      updatedAt: '2026-06-01T10:15:00.000Z',
+      deletedAt: null,
+      serverSeq: 20,
+      payload: { side: 'both', volumeMl: 0, leftVolumeMl: 0, rightVolumeMl: 0 },
+    };
+    const pumpingWithVol: TrackingEvent = {
+      id: '44444444-4444-4444-8444-444444444402',
+      babyId: BABY_ID,
+      type: 'pumping',
+      startedAt: '2026-06-01T14:00:00.000Z',
+      endedAt: '2026-06-01T14:20:00.000Z',
+      notes: 'Double electric',
+      loggedByUserId: USER_ID,
+      loggedByName: 'Alex',
+      updatedByUserId: USER_ID,
+      createdAt: '2026-06-01T14:00:00.000Z',
+      updatedAt: '2026-06-01T14:20:00.000Z',
+      deletedAt: null,
+      serverSeq: 21,
+      payload: { side: 'both', volumeMl: 130, leftVolumeMl: 60, rightVolumeMl: 70 },
+    };
+    const tummy: TrackingEvent = {
+      id: '44444444-4444-4444-8444-444444444403',
+      babyId: BABY_ID,
+      type: 'tummy_time',
+      startedAt: '2026-06-01T15:00:00.000Z',
+      endedAt: '2026-06-01T15:06:00.000Z',
+      notes: 'Great head lift',
+      loggedByUserId: USER_ID,
+      loggedByName: 'Alex',
+      updatedByUserId: USER_ID,
+      createdAt: '2026-06-01T15:00:00.000Z',
+      updatedAt: '2026-06-01T15:06:00.000Z',
+      deletedAt: null,
+      serverSeq: 22,
+      payload: { mood: 'happy' },
+    };
+
+    const csv = exportEventsToCsv([pumpingZero, pumpingWithVol, tummy], {
+      timeZone: 'UTC',
+      includeHeader: true,
+    });
+    const rows = csv.split('\r\n');
+    expect(rows[0]).toContain(
+      'relatedFeedId,pumpingSide,pumpingLeftMl,pumpingRightMl,tummyTimeMood,notes,loggedBy',
+    );
+    // 0 ml preserved and formula injection neutralized
+    expect(rows[1]).toContain(',pumping,2026-06-01,2026-06-01 10:00:00,2026-06-01 10:15:00,15.0,,,0,');
+    expect(rows[1]).toContain(",both,0,0,,'=SUM(A1:A2),Alex");
+    expect(rows[2]).toContain(',pumping,2026-06-01,2026-06-01 14:00:00,2026-06-01 14:20:00,20.0,,,130,');
+    expect(rows[2]).toContain(',both,60,70,,Double electric,Alex');
+    expect(rows[3]).toContain(',tummy_time,2026-06-01,2026-06-01 15:00:00,2026-06-01 15:06:00,6.0,');
+    expect(rows[3]).toContain(',,,,happy,Great head lift,Alex');
+
+    const dailyStats = computeDateRangeStats(
+      [pumpingZero, pumpingWithVol, tummy],
+      '2026-06-01',
+      '2026-06-01',
+      'UTC',
+    );
+    const dailyCsv = exportDailyStatsToCsv(dailyStats, true);
+    expect(dailyCsv.split('\r\n')[0]).toContain(
+      'pumpingSessions,pumpingMinutes,pumpingTotalMl,tummyTimeSessions,tummyTimeMinutes',
+    );
+    expect(dailyCsv.split('\r\n')[1]!.endsWith(',2,35.0,130,1,6.0')).toBe(true);
+
+    const md = generatePediatricianSummary({
+      baby,
+      events: [pumpingZero, pumpingWithVol, tummy],
+      startDateKey: '2026-06-01',
+      endDateKey: '2026-06-01',
+      timeZone: 'UTC',
+      format: 'markdown',
+    });
+    expect(md).toContain('Pumping: 2 sessions (130 ml total, 130 ml/day avg; 0h 35m total)');
+    expect(md).toContain('Tummy Time: 0h 6m total (0h 6m/day avg; 1 sessions)');
+    expect(md).toContain('Pumping 2 (130 ml), Tummy Time 0h 6m (1)');
   });
 });
