@@ -9,21 +9,27 @@ import {
   deleteEvent,
   finishBottleFeed,
   finishBreastFeed,
+  finishPumping,
   finishSleep,
+  finishTummyTime,
   getActiveTimersForBaby,
   getBaby,
   listBabies,
   listEventsForBaby,
   logBottleFeed,
   logDiaper,
+  logPumping,
   logSleep,
   logSpitUp,
+  logTummyTime,
   logVitamin,
   pauseBreastFeed,
   resumeBreastFeed,
   startBottleFeed,
   startBreastFeed,
+  startPumping,
   startSleep,
+  startTummyTime,
   subscribeStore,
   switchBreastSide,
   toggleVitaminForLocalDay,
@@ -597,5 +603,126 @@ describe('store (IndexedDB + atomic outbox + timers)', () => {
     });
     expect((await getActiveTimersForBaby(twinA.id)).sleep).toBeNull();
     expect((await getActiveTimersForBaby(twinB.id)).sleep?.id).toBe(sleepB.id);
+  });
+
+  it('tracks pumping and tummy_time timers, rejects duplicates, clamps endedAt, trims notes, and enforces asymmetric auto-end sleep', async () => {
+    const twinA = await createBaby({
+      name: 'Twin A',
+      dob: '2026-01-01',
+      createdByUserId: USER_ID,
+    });
+    const twinB = await createBaby({
+      name: 'Twin B',
+      dob: '2026-01-01',
+      createdByUserId: USER_ID,
+    });
+
+    // Start active sleep for both twins
+    const sleepA = await startSleep({
+      babyId: twinA.id,
+      category: 'nap',
+      userId: USER_ID,
+      startedAt: '2026-03-10T10:00:00.000Z',
+    });
+    const sleepB = await startSleep({
+      babyId: twinB.id,
+      category: 'nap',
+      userId: USER_ID,
+      startedAt: '2026-03-10T10:00:00.000Z',
+    });
+
+    // Starting & logging pumping MUST NOT auto-end active sleep
+    const activePump = await startPumping({
+      babyId: twinA.id,
+      userId: USER_ID,
+      startedAt: '2026-03-10T10:05:00.000Z',
+      notes: '   ',
+    });
+    expect(activePump.notes).toBeNull();
+    expect(activePump.payload.side).toBe('both');
+    expect((await getActiveTimersForBaby(twinA.id)).pumping?.id).toBe(activePump.id);
+    expect((await getActiveTimersForBaby(twinA.id)).sleep?.id).toBe(sleepA.id);
+
+    // Duplicate active pumping rejected
+    await expect(
+      startPumping({ babyId: twinA.id, userId: USER_ID }),
+    ).rejects.toThrow(/already running/i);
+
+    // Finishing pumping clamps endedAt >= startedAt and preserves volume/side
+    const finishedPump = await finishPumping({
+      babyId: twinA.id,
+      userId: USER_ID,
+      side: 'both',
+      volumeMl: 120,
+      leftVolumeMl: 55,
+      rightVolumeMl: 65,
+      at: '2026-03-10T10:00:00.000Z', // earlier than startedAt -> clamped
+      notes: '  Double electric  ',
+    });
+    expect(finishedPump.endedAt).toBe(activePump.startedAt);
+    expect(finishedPump.payload.volumeMl).toBe(120);
+    expect(finishedPump.payload.leftVolumeMl).toBe(55);
+    expect(finishedPump.payload.rightVolumeMl).toBe(65);
+    expect(finishedPump.notes).toBe('Double electric');
+    expect((await getActiveTimersForBaby(twinA.id)).pumping).toBeNull();
+    expect((await getActiveTimersForBaby(twinA.id)).sleep?.id).toBe(sleepA.id);
+
+    // Manual pumping log also preserves active sleep and distinguishes 0 ml
+    const manualPump = await logPumping({
+      babyId: twinA.id,
+      userId: USER_ID,
+      startedAt: '2026-03-10T10:10:00.000Z',
+      endedAt: '2026-03-10T10:25:00.000Z',
+      side: 'left',
+      volumeMl: 0,
+      notes: '',
+    });
+    expect(manualPump.payload.volumeMl).toBe(0);
+    expect(manualPump.notes).toBeNull();
+    expect((await getActiveTimersForBaby(twinA.id)).sleep?.id).toBe(sleepA.id);
+
+    // Backdated tummy_time (startedAt < sleepA.startedAt) does NOT auto-end sleepA
+    await logTummyTime({
+      babyId: twinA.id,
+      userId: USER_ID,
+      startedAt: '2026-03-10T09:30:00.000Z',
+      endedAt: '2026-03-10T09:35:00.000Z',
+      mood: 'happy',
+      notes: '  Morning mat  ',
+    });
+    expect((await getActiveTimersForBaby(twinA.id)).sleep?.id).toBe(sleepA.id);
+
+    // Starting tummy_time DOES auto-end Twin A's active sleep, but NOT Twin B's
+    const activeTummy = await startTummyTime({
+      babyId: twinA.id,
+      userId: USER_ID,
+      startedAt: '2026-03-10T10:30:00.000Z',
+    });
+    expect((await getActiveTimersForBaby(twinA.id)).tummyTime?.id).toBe(activeTummy.id);
+    expect((await getActiveTimersForBaby(twinA.id)).sleep).toBeNull();
+    expect((await getActiveTimersForBaby(twinB.id)).sleep?.id).toBe(sleepB.id);
+
+    const eventsA = await listEventsForBaby(twinA.id);
+    expect(eventsA.find((e) => e.id === sleepA.id)?.endedAt).toBe(
+      activeTummy.startedAt,
+    );
+
+    // Duplicate active tummy_time rejected
+    await expect(
+      startTummyTime({ babyId: twinA.id, userId: USER_ID }),
+    ).rejects.toThrow(/already running/i);
+
+    // Finish tummy_time
+    const finishedTummy = await finishTummyTime({
+      babyId: twinA.id,
+      userId: USER_ID,
+      mood: 'neutral',
+      at: '2026-03-10T10:36:00.000Z',
+      notes: '   ',
+    });
+    expect(finishedTummy.endedAt).toBe('2026-03-10T10:36:00.000Z');
+    expect(finishedTummy.payload.mood).toBe('neutral');
+    expect(finishedTummy.notes).toBeNull();
+    expect((await getActiveTimersForBaby(twinA.id)).tummyTime).toBeNull();
   });
 });

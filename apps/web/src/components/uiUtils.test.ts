@@ -103,6 +103,10 @@ describe('uiUtils', () => {
     day.bottleTotalMl = 240;
     day.wetCount = 6;
     day.poopyCount = 3;
+    day.pumpingCount = 2;
+    day.pumpingTotalMl = 180;
+    day.tummyTimeCount = 3;
+    day.tummyTimeTotalSeconds = 900;
 
     const mlSeries = buildTrendSeries([day], 'ml');
     expect(mlSeries[0]).toEqual({
@@ -116,9 +120,14 @@ describe('uiUtils', () => {
       bottleVolume: 240,
       wetDiapers: 6,
       poopyDiapers: 3,
+      pumpingVolume: 180,
+      pumpingCount: 2,
+      tummyTimeMinutes: 15,
+      tummyTimeCount: 3,
     });
 
     const ozSeries = buildTrendSeries([day], 'oz');
     expect(ozSeries[0]?.bottleVolume).toBeCloseTo(8.1, 1);
+    expect(ozSeries[0]?.pumpingVolume).toBeCloseTo(6.1, 1);
   });
 });

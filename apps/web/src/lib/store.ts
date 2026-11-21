@@ -14,6 +14,8 @@ import {
   type DiaperEvent,
   type DiaperKind,
   type MilkType,
+  type PumpingEvent,
+  type PumpingSide,
   type RelatedFeedType,
   type SleepCategory,
   type SleepEvent,
@@ -21,6 +23,8 @@ import {
   type SpitUpEvent,
   type SpitUpSeverity,
   type TrackingEvent,
+  type TummyTimeEvent,
+  type TummyTimeMood,
   type UpdateBabyInput,
   type VitaminEvent,
 } from '@baby-tracker/shared';
@@ -189,6 +193,7 @@ const AUTO_END_SLEEP_TYPES = new Set<TrackingEvent['type']>([
   'breast_feed',
   'bottle_feed',
   'diaper',
+  'tummy_time',
 ]);
 
 async function putEventAtomic(
@@ -378,6 +383,8 @@ export interface ActiveTimersForBaby {
   breastFeed: BreastFeedEvent | null;
   bottleFeed: BottleFeedEvent | null;
   sleep: SleepEvent | null;
+  pumping: PumpingEvent | null;
+  tummyTime: TummyTimeEvent | null;
 }
 
 export async function getActiveTimersForBaby(
@@ -387,6 +394,8 @@ export async function getActiveTimersForBaby(
   let breastFeed: BreastFeedEvent | null = null;
   let bottleFeed: BottleFeedEvent | null = null;
   let sleep: SleepEvent | null = null;
+  let pumping: PumpingEvent | null = null;
+  let tummyTime: TummyTimeEvent | null = null;
 
   for (const event of events) {
     if (event.endedAt !== null) continue;
@@ -396,10 +405,14 @@ export async function getActiveTimersForBaby(
       bottleFeed = event;
     } else if (event.type === 'sleep' && !sleep) {
       sleep = event;
+    } else if (event.type === 'pumping' && !pumping) {
+      pumping = event;
+    } else if (event.type === 'tummy_time' && !tummyTime) {
+      tummyTime = event;
     }
   }
 
-  return { breastFeed, bottleFeed, sleep };
+  return { breastFeed, bottleFeed, sleep, pumping, tummyTime };
 }
 
 // ============================================================================
@@ -1097,4 +1110,270 @@ export async function toggleVitaminForLocalDay(input: {
       await deleteEvent(ev.id, input.userId);
     }
   }
+}
+
+// ============================================================================
+// Pumping Helpers
+// ============================================================================
+
+function normalizeNotes(notes: string | null | undefined): string | null {
+  if (notes == null) return null;
+  const trimmed = notes.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+export async function startPumping(input: {
+  babyId: string;
+  userId: string;
+  userName?: string | null;
+  side?: PumpingSide;
+  volumeMl?: number | null;
+  leftVolumeMl?: number | null;
+  rightVolumeMl?: number | null;
+  startedAt?: string;
+  notes?: string | null;
+}): Promise<PumpingEvent> {
+  const active = await getActiveTimersForBaby(input.babyId);
+  if (active.pumping) {
+    throw new Error('An active pumping session is already running for this baby');
+  }
+
+  const startedAt = input.startedAt ?? nowIso();
+  const now = nowIso();
+  const event: PumpingEvent = {
+    id: uuidv4(),
+    babyId: input.babyId,
+    type: 'pumping',
+    startedAt,
+    endedAt: null,
+    notes: normalizeNotes(input.notes),
+    loggedByUserId: input.userId,
+    loggedByName: input.userName ?? null,
+    updatedByUserId: input.userId,
+    createdAt: now,
+    updatedAt: now,
+    deletedAt: null,
+    serverSeq: 0,
+    payload: {
+      side: input.side ?? 'both',
+      volumeMl: input.volumeMl ?? null,
+      ...(input.leftVolumeMl !== undefined
+        ? { leftVolumeMl: input.leftVolumeMl }
+        : {}),
+      ...(input.rightVolumeMl !== undefined
+        ? { rightVolumeMl: input.rightVolumeMl }
+        : {}),
+    },
+  };
+
+  return (await putEventAtomic(event, 'upsert')) as PumpingEvent;
+}
+
+export async function finishPumping(input: {
+  babyId: string;
+  userId: string;
+  side?: PumpingSide;
+  volumeMl?: number | null;
+  leftVolumeMl?: number | null;
+  rightVolumeMl?: number | null;
+  at?: string;
+  notes?: string | null;
+}): Promise<PumpingEvent> {
+  const active = await getActiveTimersForBaby(input.babyId);
+  if (!active.pumping) {
+    throw new Error('No active pumping session found for this baby');
+  }
+
+  return (await updateEvent(active.pumping.id, (existing) => {
+    if (existing.type !== 'pumping') {
+      throw new Error('Expected pumping event');
+    }
+    const endedAt = clampAtIso(existing.startedAt, input.at);
+    const nextSide =
+      input.side !== undefined ? input.side : existing.payload.side;
+    const nextLeft =
+      input.leftVolumeMl !== undefined
+        ? input.leftVolumeMl
+        : existing.payload.leftVolumeMl;
+    const nextRight =
+      input.rightVolumeMl !== undefined
+        ? input.rightVolumeMl
+        : existing.payload.rightVolumeMl;
+
+    return {
+      ...existing,
+      endedAt,
+      notes:
+        input.notes !== undefined
+          ? normalizeNotes(input.notes)
+          : existing.notes,
+      updatedByUserId: input.userId,
+      payload: {
+        ...(nextSide !== undefined ? { side: nextSide } : {}),
+        volumeMl:
+          input.volumeMl !== undefined
+            ? input.volumeMl
+            : existing.payload.volumeMl,
+        ...(nextLeft !== undefined ? { leftVolumeMl: nextLeft } : {}),
+        ...(nextRight !== undefined ? { rightVolumeMl: nextRight } : {}),
+      },
+    };
+  })) as PumpingEvent;
+}
+
+export async function logPumping(input: {
+  babyId: string;
+  userId: string;
+  userName?: string | null;
+  startedAt?: string;
+  endedAt?: string;
+  side?: PumpingSide;
+  volumeMl: number | null;
+  leftVolumeMl?: number | null;
+  rightVolumeMl?: number | null;
+  notes?: string | null;
+}): Promise<PumpingEvent> {
+  const startedAt = input.startedAt ?? nowIso();
+  const endedAt = clampAtIso(startedAt, input.endedAt ?? startedAt);
+  const now = nowIso();
+
+  const event: PumpingEvent = {
+    id: uuidv4(),
+    babyId: input.babyId,
+    type: 'pumping',
+    startedAt,
+    endedAt,
+    notes: normalizeNotes(input.notes),
+    loggedByUserId: input.userId,
+    loggedByName: input.userName ?? null,
+    updatedByUserId: input.userId,
+    createdAt: now,
+    updatedAt: now,
+    deletedAt: null,
+    serverSeq: 0,
+    payload: {
+      ...(input.side !== undefined ? { side: input.side } : {}),
+      volumeMl: input.volumeMl,
+      ...(input.leftVolumeMl !== undefined
+        ? { leftVolumeMl: input.leftVolumeMl }
+        : {}),
+      ...(input.rightVolumeMl !== undefined
+        ? { rightVolumeMl: input.rightVolumeMl }
+        : {}),
+    },
+  };
+
+  return (await putEventAtomic(event, 'upsert')) as PumpingEvent;
+}
+
+// ============================================================================
+// Tummy Time Helpers
+// ============================================================================
+
+export async function startTummyTime(input: {
+  babyId: string;
+  userId: string;
+  userName?: string | null;
+  mood?: TummyTimeMood;
+  startedAt?: string;
+  notes?: string | null;
+}): Promise<TummyTimeEvent> {
+  const active = await getActiveTimersForBaby(input.babyId);
+  if (active.tummyTime) {
+    throw new Error(
+      'An active tummy time session is already running for this baby',
+    );
+  }
+
+  const startedAt = input.startedAt ?? nowIso();
+  const now = nowIso();
+  const event: TummyTimeEvent = {
+    id: uuidv4(),
+    babyId: input.babyId,
+    type: 'tummy_time',
+    startedAt,
+    endedAt: null,
+    notes: normalizeNotes(input.notes),
+    loggedByUserId: input.userId,
+    loggedByName: input.userName ?? null,
+    updatedByUserId: input.userId,
+    createdAt: now,
+    updatedAt: now,
+    deletedAt: null,
+    serverSeq: 0,
+    payload: {
+      ...(input.mood !== undefined ? { mood: input.mood } : {}),
+    },
+  };
+
+  return (await putEventAtomic(event, 'upsert')) as TummyTimeEvent;
+}
+
+export async function finishTummyTime(input: {
+  babyId: string;
+  userId: string;
+  mood?: TummyTimeMood;
+  at?: string;
+  notes?: string | null;
+}): Promise<TummyTimeEvent> {
+  const active = await getActiveTimersForBaby(input.babyId);
+  if (!active.tummyTime) {
+    throw new Error('No active tummy time session found for this baby');
+  }
+
+  return (await updateEvent(active.tummyTime.id, (existing) => {
+    if (existing.type !== 'tummy_time') {
+      throw new Error('Expected tummy_time event');
+    }
+    const endedAt = clampAtIso(existing.startedAt, input.at);
+    const nextMood =
+      input.mood !== undefined ? input.mood : existing.payload.mood;
+
+    return {
+      ...existing,
+      endedAt,
+      notes:
+        input.notes !== undefined
+          ? normalizeNotes(input.notes)
+          : existing.notes,
+      updatedByUserId: input.userId,
+      payload: {
+        ...(nextMood !== undefined ? { mood: nextMood } : {}),
+      },
+    };
+  })) as TummyTimeEvent;
+}
+
+export async function logTummyTime(input: {
+  babyId: string;
+  userId: string;
+  userName?: string | null;
+  startedAt: string;
+  endedAt: string;
+  mood?: TummyTimeMood;
+  notes?: string | null;
+}): Promise<TummyTimeEvent> {
+  const endedAt = clampAtIso(input.startedAt, input.endedAt);
+  const now = nowIso();
+
+  const event: TummyTimeEvent = {
+    id: uuidv4(),
+    babyId: input.babyId,
+    type: 'tummy_time',
+    startedAt: input.startedAt,
+    endedAt,
+    notes: normalizeNotes(input.notes),
+    loggedByUserId: input.userId,
+    loggedByName: input.userName ?? null,
+    updatedByUserId: input.userId,
+    createdAt: now,
+    updatedAt: now,
+    deletedAt: null,
+    serverSeq: 0,
+    payload: {
+      ...(input.mood !== undefined ? { mood: input.mood } : {}),
+    },
+  };
+
+  return (await putEventAtomic(event, 'upsert')) as TummyTimeEvent;
 }

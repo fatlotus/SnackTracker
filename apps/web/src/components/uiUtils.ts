@@ -374,6 +374,10 @@ export interface TrendDayPoint {
   bottleVolume: number;
   wetDiapers: number;
   poopyDiapers: number;
+  pumpingVolume: number;
+  pumpingCount: number;
+  tummyTimeMinutes: number;
+  tummyTimeCount: number;
 }
 
 export function buildTrendSeries(
@@ -404,6 +408,13 @@ export function buildTrendSeries(
           : Math.round(day.bottleTotalMl),
       wetDiapers: day.wetCount,
       poopyDiapers: day.poopyCount,
+      pumpingVolume:
+        unit === 'oz'
+          ? Math.round(mlToOz(day.pumpingTotalMl) * 10) / 10
+          : Math.round(day.pumpingTotalMl),
+      pumpingCount: day.pumpingCount,
+      tummyTimeMinutes: Math.round((day.tummyTimeTotalSeconds / 60) * 10) / 10,
+      tummyTimeCount: day.tummyTimeCount,
     };
   });
 }
