@@ -12,11 +12,9 @@ registerSW({
     if (!registration) return;
 
     const checkForUpdate = () => {
-      if (navigator.onLine) {
-        void registration.update().catch(() => {
-          // Ignore transient network errors during SW update checks
-        });
-      }
+      void registration.update().catch(() => {
+        // Ignore transient network errors during SW update checks
+      });
     };
 
     setInterval(checkForUpdate, SW_UPDATE_INTERVAL_MS);
