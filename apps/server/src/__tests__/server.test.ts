@@ -2576,4 +2576,62 @@ describe('Baby Tracker Server (M2)', () => {
     expect(viewerPush.statusCode).toBe(200);
     expect(viewerPush.json().rejected).toHaveLength(2);
   });
+
+  it('sets appropriate Cache-Control headers for SW, HTML, manifest, and hashed assets', async () => {
+    const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-static-'));
+    tempDirs.push(staticDir);
+    fs.mkdirSync(path.join(staticDir, 'assets'), { recursive: true });
+    fs.writeFileSync(path.join(staticDir, 'index.html'), '<html></html>');
+    fs.writeFileSync(path.join(staticDir, 'sw.js'), '// sw');
+    fs.writeFileSync(path.join(staticDir, 'registerSW.js'), '// register');
+    fs.writeFileSync(path.join(staticDir, 'manifest.webmanifest'), '{}');
+    fs.writeFileSync(
+      path.join(staticDir, 'assets', 'index-abc123.js'),
+      'console.log(1);',
+    );
+
+    const app = await createTestApp(staticDir);
+
+    const swRes = await app.inject({ method: 'GET', url: '/sw.js' });
+    expect(swRes.statusCode).toBe(200);
+    expect(swRes.headers['cache-control']).toBe(
+      'no-cache, no-store, must-revalidate',
+    );
+
+    const regSwRes = await app.inject({
+      method: 'GET',
+      url: '/registerSW.js',
+    });
+    expect(regSwRes.statusCode).toBe(200);
+    expect(regSwRes.headers['cache-control']).toBe(
+      'no-cache, no-store, must-revalidate',
+    );
+
+    const indexRes = await app.inject({ method: 'GET', url: '/index.html' });
+    expect(indexRes.statusCode).toBe(200);
+    expect(indexRes.headers['cache-control']).toBe('no-cache');
+
+    const spaFallbackRes = await app.inject({
+      method: 'GET',
+      url: '/timeline',
+    });
+    expect(spaFallbackRes.statusCode).toBe(200);
+    expect(spaFallbackRes.headers['cache-control']).toBe('no-cache');
+
+    const manifestRes = await app.inject({
+      method: 'GET',
+      url: '/manifest.webmanifest',
+    });
+    expect(manifestRes.statusCode).toBe(200);
+    expect(manifestRes.headers['cache-control']).toBe('no-cache');
+
+    const assetRes = await app.inject({
+      method: 'GET',
+      url: '/assets/index-abc123.js',
+    });
+    expect(assetRes.statusCode).toBe(200);
+    expect(assetRes.headers['cache-control']).toBe(
+      'public, max-age=31536000, immutable',
+    );
+  });
 });

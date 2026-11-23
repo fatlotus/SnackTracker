@@ -10,27 +10,13 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       manifest: false,
-      includeAssets: [
-        'manifest.webmanifest',
-        'apple-touch-icon.png',
-        'icons/*.png',
-      ],
       workbox: {
+        cacheId: 'snacktracker-v2',
+        cleanupOutdatedCaches: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webmanifest}'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//, /^\/healthz$/],
         runtimeCaching: [
-          {
-            urlPattern: ({ request, url }) =>
-              request.mode === 'navigate' &&
-              !url.pathname.startsWith('/api/') &&
-              url.pathname !== '/healthz',
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'html-navigation',
-              networkTimeoutSeconds: 3,
-            },
-          },
           {
             urlPattern: /^\/api\/.*/,
             handler: 'NetworkOnly',

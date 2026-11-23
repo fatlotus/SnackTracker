@@ -47,6 +47,25 @@ export async function buildApp(
       root: config.staticDir,
       prefix: '/',
       wildcard: false,
+      cacheControl: false,
+      setHeaders: (res, filePath) => {
+        const relPath = path
+          .relative(config.staticDir, filePath)
+          .split(path.sep)
+          .join('/');
+        if (relPath === 'sw.js' || relPath === 'registerSW.js') {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        } else if (
+          relPath === 'index.html' ||
+          relPath === 'manifest.webmanifest'
+        ) {
+          res.setHeader('Cache-Control', 'no-cache');
+        } else if (relPath.startsWith('assets/')) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        } else {
+          res.setHeader('Cache-Control', 'public, max-age=0');
+        }
+      },
     });
   }
 
