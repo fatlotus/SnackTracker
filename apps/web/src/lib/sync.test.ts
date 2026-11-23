@@ -321,4 +321,49 @@ describe('sync engine', () => {
     expect(outbox).toHaveLength(1);
     expect(outbox[0]?.entityId).toBe(baby.id);
   });
+
+  it('still syncs when navigator.onLine is falsely false and the network succeeds', async () => {
+    vi.stubGlobal('navigator', { onLine: false });
+    vi.stubGlobal('window', {
+      location: { hostname: 'babysnacktrack.com' },
+    });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/sync/pull')) {
+        return new Response(
+          JSON.stringify({
+            babies: [],
+            members: [],
+            events: [],
+            latestSeq: 3,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const status = await syncOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(status.state).toBe('idle');
+    expect(status.lastError).toBeNull();
+  });
+
+  it('enters offline state when navigator.onLine is false and fetch throws a network error', async () => {
+    vi.stubGlobal('navigator', { onLine: false });
+    vi.stubGlobal('window', {
+      location: { hostname: 'babysnacktrack.com' },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch');
+      }),
+    );
+
+    const status = await syncOnce();
+    expect(status.state).toBe('offline');
+  });
 });

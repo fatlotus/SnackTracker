@@ -147,7 +147,7 @@ export function resetSyncStateForTest(): void {
 
 export async function syncOnce(options: SyncOptions = {}): Promise<SyncStatus> {
   if (inFlightSync) {
-    if (isNavigatorOffline()) {
+    if (explicitOffline) {
       return inFlightSync;
     }
     if (!queuedSync) {
@@ -169,7 +169,7 @@ export async function syncOnce(options: SyncOptions = {}): Promise<SyncStatus> {
     const db = await getDb();
     const initialPending = await db.count('outbox');
 
-    if (isNavigatorOffline()) {
+    if (explicitOffline) {
       return setSyncStatus({
         state: 'offline',
         pendingCount: initialPending,
@@ -291,7 +291,7 @@ export async function syncOnce(options: SyncOptions = {}): Promise<SyncStatus> {
       }
 
       return setSyncStatus({
-        state: isNavigatorOffline() ? 'offline' : 'idle',
+        state: explicitOffline ? 'offline' : 'idle',
         pendingCount: remainingOutbox.length,
         lastSyncedAt: nowIso(),
         lastError: null,
@@ -300,7 +300,7 @@ export async function syncOnce(options: SyncOptions = {}): Promise<SyncStatus> {
       });
     } catch (err) {
       const pendingCount = await db.count('outbox');
-      if (isNavigatorOffline()) {
+      if (explicitOffline || (!(err instanceof ApiError) && isNavigatorOffline())) {
         return setSyncStatus({
           state: 'offline',
           pendingCount,
@@ -332,7 +332,7 @@ export async function syncOnce(options: SyncOptions = {}): Promise<SyncStatus> {
       inFlightSync = null;
       if (resyncRequested && !queuedSync) {
         resyncRequested = false;
-        if (!isNavigatorOffline()) {
+        if (!explicitOffline) {
           queueMicrotask(() => {
             void syncOnce();
           });
@@ -417,7 +417,7 @@ export function startSyncLoop(options: SyncOptions = {}): () => void {
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
       return;
     }
-    if (isNavigatorOffline()) {
+    if (explicitOffline) {
       return;
     }
     if (
@@ -431,7 +431,7 @@ export function startSyncLoop(options: SyncOptions = {}): () => void {
 
   const unsubscribeStore = subscribeStore(() => {
     if (disposed || notifyingFromSync) return;
-    if (isNavigatorOffline()) {
+    if (explicitOffline) {
       return;
     }
     void (async () => {
@@ -439,7 +439,7 @@ export function startSyncLoop(options: SyncOptions = {}): () => void {
         const db = await getDb();
         const pendingCount = await db.count('outbox');
         if (disposed || pendingCount <= 0) return;
-        if (isNavigatorOffline()) {
+        if (explicitOffline) {
           return;
         }
         if (inFlightSync !== null) {

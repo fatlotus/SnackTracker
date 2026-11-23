@@ -117,7 +117,7 @@ export async function logout(): Promise<void> {
 export async function getCurrentUser(): Promise<CurrentUserResult> {
   const cachedUser = await getCachedUser();
 
-  if (isNavigatorOffline()) {
+  if (cachedUser !== null && isNavigatorOffline()) {
     return {
       user: cachedUser,
       fromCache: true,

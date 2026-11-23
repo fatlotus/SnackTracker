@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import type { User } from '@baby-tracker/shared';
 import { Baby as BabyIcon, Link2, WifiOff } from 'lucide-react';
 import { login, register } from '../lib/auth.js';
@@ -24,8 +24,41 @@ export function AuthView({
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [isOffline, setIsOffline] = useState(false);
 
-  const isOffline = isNavigatorOffline();
+  useEffect(() => {
+    let cancelled = false;
+
+    const verifyConnectivity = async () => {
+      if (!isNavigatorOffline()) {
+        if (!cancelled) setIsOffline(false);
+        return;
+      }
+      try {
+        const res = await fetch('/healthz', { cache: 'no-store' });
+        if (!cancelled) setIsOffline(!res.ok);
+      } catch {
+        if (!cancelled) setIsOffline(true);
+      }
+    };
+
+    const handleOnline = () => {
+      if (!cancelled) setIsOffline(false);
+    };
+    const handleOffline = () => {
+      if (!cancelled) setIsOffline(true);
+    };
+
+    void verifyConnectivity();
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
