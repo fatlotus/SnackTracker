@@ -280,6 +280,7 @@ const enUS = {
 
   // TrackingModals
   'modals.closeAria': 'Close modal',
+  'modals.durationMin': 'Duration (min)',
   'modals.breast.editTitle': 'Edit Breastfeed',
   'modals.breast.logTitle': 'Log Breastfeed',
   'modals.breast.startTime': 'Start Time',
@@ -795,6 +796,7 @@ const zhCN: Record<TranslationKey, string> = {
 
   // TrackingModals
   'modals.closeAria': '关闭弹窗',
+  'modals.durationMin': '时长（分钟）',
   'modals.breast.editTitle': '编辑母乳记录',
   'modals.breast.logTitle': '补记母乳喂养',
   'modals.breast.startTime': '开始时间',

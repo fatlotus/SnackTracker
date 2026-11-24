@@ -4,15 +4,18 @@ import {
   buildManualBreastFeedSegments,
   buildTrendSeries,
   computeBabyAgeLabel,
+  computeDurationMinutes,
   extractInviteCodeFromLocation,
   formatClock,
   formatDurationShort,
   formatTimeAgo,
   formatVolume,
   fromLocalDateTimeInputValue,
+  parseDurationMinutesInput,
   parseInviteInput,
   parseVolumeInputToMl,
   resolveThemeIsDark,
+  subtractMinutesFromLocalDateTime,
   toLocalDateTimeInputValue,
   volumeMlToInputString,
 } from './uiUtils.js';
@@ -129,5 +132,71 @@ describe('uiUtils', () => {
     const ozSeries = buildTrendSeries([day], 'oz');
     expect(ozSeries[0]?.bottleVolume).toBeCloseTo(8.1, 1);
     expect(ozSeries[0]?.pumpingVolume).toBeCloseTo(6.1, 1);
+  });
+
+  it('computes duration minutes between local datetime-local values', () => {
+    expect(computeDurationMinutes('2026-05-10T14:00', '2026-05-10T14:12')).toBe(12);
+    expect(computeDurationMinutes('2026-05-10T14:00', '2026-05-10T14:45')).toBe(45);
+    expect(computeDurationMinutes('2026-05-10T14:00', '2026-05-10T16:05')).toBe(125);
+    expect(computeDurationMinutes('2026-05-10T14:00', '2026-05-10T14:00')).toBe(0);
+    // Across midnight
+    expect(computeDurationMinutes('2026-05-09T23:53', '2026-05-10T00:05')).toBe(12);
+    // End before start -> null
+    expect(computeDurationMinutes('2026-05-10T14:15', '2026-05-10T14:00')).toBeNull();
+    // Invalid / empty strings -> null
+    expect(computeDurationMinutes('', '2026-05-10T14:00')).toBeNull();
+    expect(computeDurationMinutes('2026-05-10T14:00', '')).toBeNull();
+    expect(computeDurationMinutes('not-a-date', '2026-05-10T14:00')).toBeNull();
+    expect(computeDurationMinutes('2026-05-10T14:00', 'invalid')).toBeNull();
+  });
+
+  it('parses duration minute inputs with validation and overflow guards', () => {
+    expect(parseDurationMinutesInput('0')).toBe(0);
+    expect(parseDurationMinutesInput('12')).toBe(12);
+    expect(parseDurationMinutesInput(' 45 ')).toBe(45);
+    expect(parseDurationMinutesInput('12.4')).toBe(12);
+    expect(parseDurationMinutesInput('')).toBeNull();
+    expect(parseDurationMinutesInput('   ')).toBeNull();
+    expect(parseDurationMinutesInput('-5')).toBeNull();
+    expect(parseDurationMinutesInput('abc')).toBeNull();
+    expect(parseDurationMinutesInput('NaN')).toBeNull();
+    expect(parseDurationMinutesInput('Infinity')).toBeNull();
+    expect(parseDurationMinutesInput('1e20')).toBeNull();
+  });
+
+  it('subtracts minutes from local datetime values across midnight, month, and year rollovers', () => {
+    expect(subtractMinutesFromLocalDateTime('2026-05-10T14:12', 12)).toBe(
+      '2026-05-10T14:00',
+    );
+    expect(subtractMinutesFromLocalDateTime('2026-05-10T14:12', 0)).toBe(
+      '2026-05-10T14:12',
+    );
+    // Midnight rollover
+    expect(subtractMinutesFromLocalDateTime('2026-05-10T00:05', 12)).toBe(
+      '2026-05-09T23:53',
+    );
+    // Month rollover
+    expect(subtractMinutesFromLocalDateTime('2026-03-01T00:10', 20)).toBe(
+      '2026-02-28T23:50',
+    );
+    // Year rollover
+    expect(subtractMinutesFromLocalDateTime('2026-01-01T00:05', 12)).toBe(
+      '2025-12-31T23:53',
+    );
+    // Invalid / negative / overflowing inputs -> null
+    expect(subtractMinutesFromLocalDateTime('2026-05-10T14:12', -1)).toBeNull();
+    expect(subtractMinutesFromLocalDateTime('2026-05-10T14:12', Number.NaN)).toBeNull();
+    expect(
+      subtractMinutesFromLocalDateTime('2026-05-10T14:12', Number.POSITIVE_INFINITY),
+    ).toBeNull();
+    expect(subtractMinutesFromLocalDateTime('2026-05-10T14:12', 1e15)).toBeNull();
+    expect(subtractMinutesFromLocalDateTime('', 12)).toBeNull();
+    expect(subtractMinutesFromLocalDateTime('invalid', 12)).toBeNull();
+
+    // Round-trip consistency
+    const end = '2026-05-10T00:05';
+    const start = subtractMinutesFromLocalDateTime(end, 37);
+    expect(start).toBe('2026-05-09T23:28');
+    expect(computeDurationMinutes(start!, end)).toBe(37);
   });
 });

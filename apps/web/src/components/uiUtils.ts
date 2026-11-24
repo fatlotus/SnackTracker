@@ -183,6 +183,92 @@ export function fromLocalDateTimeInputValue(localStr: string): string {
   return new Date(parsed).toISOString();
 }
 
+const MAX_DURATION_MINUTES = 52_560_000; // 100 years in minutes
+
+/**
+ * Computes the rounded duration in minutes between two `datetime-local` values
+ * (`YYYY-MM-DDTHH:mm`). Returns `null` if either value is invalid or end < start.
+ */
+export function computeDurationMinutes(
+  startedLocal: string,
+  endedLocal: string,
+): number | null {
+  if (!startedLocal.trim() || !endedLocal.trim()) {
+    return null;
+  }
+  try {
+    const startMs = Date.parse(fromLocalDateTimeInputValue(startedLocal));
+    const endMs = Date.parse(fromLocalDateTimeInputValue(endedLocal));
+    if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs < startMs) {
+      return null;
+    }
+    return Math.round((endMs - startMs) / 60_000);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parses a user-entered duration string in minutes.
+ * Returns `null` if empty, non-finite, negative, or exceeding the safe range.
+ */
+export function parseDurationMinutesInput(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (trimmed === '') return null;
+  const num = Number(trimmed);
+  if (!Number.isFinite(num) || num < 0) {
+    return null;
+  }
+  const rounded = Math.round(num);
+  if (!Number.isSafeInteger(rounded) || rounded > MAX_DURATION_MINUTES) {
+    return null;
+  }
+  return rounded;
+}
+
+/**
+ * Subtracts `durationMinutes` from a `datetime-local` value using UTC epoch ms
+ * arithmetic (handling midnight, month, year, and DST boundaries) and formats
+ * the result back to `YYYY-MM-DDTHH:mm`.
+ */
+export function subtractMinutesFromLocalDateTime(
+  endedLocal: string,
+  durationMinutes: number,
+): string | null {
+  if (
+    !endedLocal.trim() ||
+    !Number.isFinite(durationMinutes) ||
+    durationMinutes < 0
+  ) {
+    return null;
+  }
+  const roundedMinutes = Math.round(durationMinutes);
+  if (!Number.isSafeInteger(roundedMinutes) || roundedMinutes > MAX_DURATION_MINUTES) {
+    return null;
+  }
+  try {
+    const endMs = Date.parse(fromLocalDateTimeInputValue(endedLocal));
+    if (Number.isNaN(endMs)) {
+      return null;
+    }
+    const startMs = endMs - roundedMinutes * 60_000;
+    if (!Number.isFinite(startMs)) {
+      return null;
+    }
+    const dt = new Date(startMs);
+    if (Number.isNaN(dt.getTime())) {
+      return null;
+    }
+    const year = dt.getFullYear();
+    if (year < 1 || year > 9999) {
+      return null;
+    }
+    return toLocalDateTimeInputValue(dt.toISOString());
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Formats a volume in ml for display in either `ml` or `oz`.
  */
