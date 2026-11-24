@@ -297,4 +297,139 @@ test.describe('Pumping & Tummy Time Tracking', () => {
     await expect(finishDialog).toBeHidden();
     await expect(page.getByText('95 ml').first()).toBeVisible();
   });
+
+  test('pumping modal defaults to 12 minutes, syncs duration with start/end (including midnight rollover), and has zero overflow at 320x568', async ({
+    page,
+  }) => {
+    await setupAuthenticatedBaby(page, { babyName: 'Luna' });
+
+    const pumpingCard = page.getByRole('region', { name: 'Pumping' });
+    await pumpingCard.getByRole('button', { name: 'Quick Entry' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Log Pumping' });
+    await expect(dialog).toBeVisible();
+
+    // Default duration is 12 minutes and start = end - 12m
+    const startInput = dialog.locator('#pumping-start');
+    const endInput = dialog.locator('#pumping-end');
+    const durationInput = dialog.locator('#pumping-duration');
+
+    await expect(durationInput).toHaveValue('12');
+    const initialStart = await startInput.inputValue();
+    const initialEnd = await endInput.inputValue();
+    expect(initialStart).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+    expect(initialEnd).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+    const initialDiffMin = Math.round(
+      (Date.parse(initialEnd) - Date.parse(initialStart)) / 60_000,
+    );
+    expect(initialDiffMin).toBe(12);
+
+    // Narrow 320x568 viewport with modal open must have zero horizontal overflow
+    await page.setViewportSize({ width: 320, height: 568 });
+    const hasOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > window.innerWidth,
+    );
+    expect(hasOverflow).toBe(false);
+    await page.setViewportSize({ width: 1280, height: 800 });
+
+    // Editing duration across midnight updates start time to previous day
+    await endInput.fill('2026-05-10T00:05');
+    await durationInput.fill('12');
+    await expect(startInput).toHaveValue('2026-05-09T23:53');
+
+    // Editing start time and end time keeps duration in sync
+    await startInput.fill('2026-05-09T23:45');
+    await expect(durationInput).toHaveValue('20');
+    await endInput.fill('2026-05-10T00:10');
+    await expect(durationInput).toHaveValue('25');
+
+    // Restore today's end time, set duration to 20 min, and save
+    await endInput.fill(initialEnd);
+    await durationInput.fill('20');
+    const updatedStart = await startInput.inputValue();
+    expect(
+      Math.round((Date.parse(initialEnd) - Date.parse(updatedStart)) / 60_000),
+    ).toBe(20);
+
+    await dialog.locator('#pumping-volume').fill('90');
+    await dialog.locator('#pumping-notes').fill('Synced 20m pump');
+    await dialog.getByRole('button', { name: 'Save Pumping' }).click();
+    await expect(dialog).toBeHidden();
+
+    // Verify persisted 20m duration in Timeline and pre-populated duration on Edit
+    await page.getByRole('button', { name: /Timeline/i }).first().click();
+    await page.getByRole('button', { name: 'Pumping', exact: true }).click();
+    await expect(page.getByText('Synced 20m pump')).toBeVisible();
+    await expect(page.getByText('20m').first()).toBeVisible();
+
+    await page.getByRole('button', { name: 'Edit Pumping' }).click();
+    const editDialog = page.getByRole('dialog', { name: 'Edit Pumping' });
+    await expect(editDialog.locator('#pumping-duration')).toHaveValue('20');
+    await editDialog.getByRole('button', { name: 'Cancel' }).click();
+  });
+
+  test('duration input respects active/finishing states and syncs start time in bottle, sleep, and tummy time modals', async ({
+    page,
+  }) => {
+    await setupAuthenticatedBaby(page, { babyName: 'Owen' });
+
+    // Start Pumping live timer -> isEditingActive hides duration, finishingActive disables it
+    const pumpingCard = page.getByRole('region', { name: 'Pumping' });
+    await pumpingCard.getByRole('button', { name: 'Start Pump' }).click();
+    await expect(pumpingCard.getByText('Pumping in progress')).toBeVisible();
+
+    await page.getByRole('button', { name: /Timeline/i }).first().click();
+    await page.getByRole('button', { name: 'Edit Pumping' }).click();
+    const editActiveDialog = page.getByRole('dialog', { name: 'Edit Pumping' });
+    await expect(editActiveDialog.locator('#pumping-duration')).toHaveCount(0);
+    await editActiveDialog.getByRole('button', { name: 'Cancel' }).click();
+
+    await page.getByRole('button', { name: /Dashboard/i }).first().click();
+    await page
+      .getByRole('region', { name: 'Pumping' })
+      .getByRole('button', { name: 'Finish & Log Volume' })
+      .click();
+    const finishDialog = page.getByRole('dialog', { name: 'Finish Pumping' });
+    await expect(finishDialog.locator('#pumping-duration')).toBeVisible();
+    await expect(finishDialog.locator('#pumping-duration')).toBeDisabled();
+    await finishDialog.getByRole('button', { name: 'Cancel' }).click();
+
+    // Bottle Feed modal duration sync
+    await page.getByRole('button', { name: /Log Bottle/i }).first().click();
+    const bottleDialog = page.getByRole('dialog', { name: 'Log Bottle Feed' });
+    await expect(bottleDialog.locator('#bottle-duration')).toHaveValue('0');
+    await bottleDialog.locator('#bottle-end').fill('2026-05-10T10:30');
+    await bottleDialog.locator('#bottle-duration').fill('15');
+    await expect(bottleDialog.locator('#bottle-start')).toHaveValue(
+      '2026-05-10T10:15',
+    );
+    await bottleDialog.getByRole('button', { name: 'Cancel' }).click();
+
+    // Sleep modal duration sync (including midnight rollover)
+    await page
+      .getByRole('region', { name: 'Sleep' })
+      .getByRole('button', { name: /^Manual$/i })
+      .click();
+    const sleepDialog = page.getByRole('dialog', { name: 'Log Sleep' });
+    await expect(sleepDialog.locator('#sleep-duration')).toHaveValue('45');
+    await sleepDialog.locator('#sleep-end').fill('2026-05-10T01:15');
+    await sleepDialog.locator('#sleep-duration').fill('90');
+    await expect(sleepDialog.locator('#sleep-start')).toHaveValue(
+      '2026-05-09T23:45',
+    );
+    await sleepDialog.getByRole('button', { name: 'Cancel' }).click();
+
+    // Tummy Time modal duration sync
+    await page
+      .getByRole('region', { name: 'Tummy Time' })
+      .getByRole('button', { name: 'Quick Entry' })
+      .click();
+    const tummyDialog = page.getByRole('dialog', { name: 'Log Tummy Time' });
+    await expect(tummyDialog.locator('#tummy-duration')).toHaveValue('5');
+    await tummyDialog.locator('#tummy-end').fill('2026-05-10T11:00');
+    await tummyDialog.locator('#tummy-duration').fill('10');
+    await expect(tummyDialog.locator('#tummy-start')).toHaveValue(
+      '2026-05-10T10:50',
+    );
+    await tummyDialog.getByRole('button', { name: 'Cancel' }).click();
+  });
 });
