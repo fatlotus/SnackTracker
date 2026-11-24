@@ -35,9 +35,12 @@ import {
 import { useI18n } from '../lib/i18n.js';
 import {
   buildManualBreastFeedSegments,
+  computeDurationMinutes,
   fromLocalDateTimeInputValue,
   getLocalTimeZone,
+  parseDurationMinutesInput,
   parseVolumeInputToMl,
+  subtractMinutesFromLocalDateTime,
   toLocalDateTimeInputValue,
   volumeMlToInputString,
   type VolumeUnit,
@@ -91,6 +94,94 @@ function ModalShell({
         </div>
         {children}
       </div>
+    </div>
+  );
+}
+
+function useSyncedTimeRange(
+  getInitialRange: () => {
+    initialStartedLocal: string;
+    initialEndedLocal: string;
+  },
+) {
+  const [{ initialStartedLocal, initialEndedLocal, initialDurationStr }] =
+    useState(() => {
+      const { initialStartedLocal: start, initialEndedLocal: end } =
+        getInitialRange();
+      const mins = computeDurationMinutes(start, end);
+      return {
+        initialStartedLocal: start,
+        initialEndedLocal: end,
+        initialDurationStr: mins !== null ? String(mins) : '',
+      };
+    });
+
+  const [startedLocal, setStartedLocal] = useState(initialStartedLocal);
+  const [endedLocal, setEndedLocal] = useState(initialEndedLocal);
+  const [durationStr, setDurationStr] = useState(initialDurationStr);
+
+  function handleStartedLocalChange(nextStart: string) {
+    setStartedLocal(nextStart);
+    const mins = computeDurationMinutes(nextStart, endedLocal);
+    setDurationStr(mins !== null ? String(mins) : '');
+  }
+
+  function handleEndedLocalChange(nextEnd: string) {
+    setEndedLocal(nextEnd);
+    const mins = computeDurationMinutes(startedLocal, nextEnd);
+    setDurationStr(mins !== null ? String(mins) : '');
+  }
+
+  function handleDurationChange(raw: string) {
+    setDurationStr(raw);
+    const mins = parseDurationMinutesInput(raw);
+    if (mins === null) return;
+    const nextStart = subtractMinutesFromLocalDateTime(endedLocal, mins);
+    if (nextStart !== null) {
+      setStartedLocal(nextStart);
+    }
+  }
+
+  return {
+    initialStartedLocal,
+    initialEndedLocal,
+    startedLocal,
+    endedLocal,
+    durationStr,
+    handleStartedLocalChange,
+    handleEndedLocalChange,
+    handleDurationChange,
+  };
+}
+
+function DurationField({
+  id,
+  value,
+  disabled = false,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  disabled?: boolean;
+  onChange: (nextValue: string) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="sm:col-span-2">
+      <label htmlFor={id} className="mb-1 block text-sm font-medium">
+        {t('modals.durationMin')}
+      </label>
+      <input
+        id={id}
+        type="number"
+        min={0}
+        step={1}
+        inputMode="numeric"
+        disabled={disabled}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950"
+      />
     </div>
   );
 }
@@ -356,7 +447,6 @@ export function BottleFeedModal({
 }) {
   const { t } = useI18n();
   const target = finishingActive ?? existing;
-  const nowStr = toLocalDateTimeInputValue(new Date().toISOString());
 
   const [unit, setUnit] = useState<VolumeUnit>(volumeUnit);
   const [volumeStr, setVolumeStr] = useState(
@@ -365,16 +455,26 @@ export function BottleFeedModal({
   const [milkType, setMilkType] = useState<MilkType>(
     target?.payload.milkType ?? 'breastmilk',
   );
-  const [startedLocal, setStartedLocal] = useState(
-    target ? toLocalDateTimeInputValue(target.startedAt) : nowStr,
-  );
-  const [endedLocal, setEndedLocal] = useState(
-    finishingActive
-      ? nowStr
-      : existing?.endedAt
-        ? toLocalDateTimeInputValue(existing.endedAt)
+  const {
+    startedLocal,
+    endedLocal,
+    durationStr,
+    handleStartedLocalChange,
+    handleEndedLocalChange,
+    handleDurationChange,
+  } = useSyncedTimeRange(() => {
+    const nowStr = toLocalDateTimeInputValue(new Date().toISOString());
+    return {
+      initialStartedLocal: target
+        ? toLocalDateTimeInputValue(target.startedAt)
         : nowStr,
-  );
+      initialEndedLocal: finishingActive
+        ? nowStr
+        : existing?.endedAt
+          ? toLocalDateTimeInputValue(existing.endedAt)
+          : nowStr,
+    };
+  });
   const [notes, setNotes] = useState(target?.notes ?? '');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -533,7 +633,7 @@ export function BottleFeedModal({
               required
               disabled={Boolean(finishingActive)}
               value={startedLocal}
-              onChange={(e) => setStartedLocal(e.target.value)}
+              onChange={(e) => handleStartedLocalChange(e.target.value)}
               className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950"
             />
           </div>
@@ -546,10 +646,16 @@ export function BottleFeedModal({
               type="datetime-local"
               required
               value={endedLocal}
-              onChange={(e) => setEndedLocal(e.target.value)}
+              onChange={(e) => handleEndedLocalChange(e.target.value)}
               className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
             />
           </div>
+          <DurationField
+            id="bottle-duration"
+            value={durationStr}
+            disabled={Boolean(finishingActive)}
+            onChange={handleDurationChange}
+          />
         </div>
 
         <div>
@@ -617,21 +723,32 @@ export function SleepModal({
   onClose: () => void;
 }) {
   const { t } = useI18n();
-  const defaultStart = existing
-    ? toLocalDateTimeInputValue(existing.startedAt)
-    : toLocalDateTimeInputValue(new Date(Date.now() - 45 * 60_000).toISOString());
-  const defaultEnd = existing?.endedAt
-    ? toLocalDateTimeInputValue(existing.endedAt)
-    : toLocalDateTimeInputValue(new Date().toISOString());
-
   const [category, setCategory] = useState<SleepCategory>(
     existing?.payload.category ?? 'nap',
   );
   const [location, setLocation] = useState<SleepLocation | ''>(
     existing?.payload.location ?? '',
   );
-  const [startedLocal, setStartedLocal] = useState(defaultStart);
-  const [endedLocal, setEndedLocal] = useState(defaultEnd);
+  const {
+    startedLocal,
+    endedLocal,
+    durationStr,
+    handleStartedLocalChange,
+    handleEndedLocalChange,
+    handleDurationChange,
+  } = useSyncedTimeRange(() => {
+    const nowMs = Date.now();
+    return {
+      initialStartedLocal: existing
+        ? toLocalDateTimeInputValue(existing.startedAt)
+        : toLocalDateTimeInputValue(
+            new Date(nowMs - 45 * 60_000).toISOString(),
+          ),
+      initialEndedLocal: existing?.endedAt
+        ? toLocalDateTimeInputValue(existing.endedAt)
+        : toLocalDateTimeInputValue(new Date(nowMs).toISOString()),
+    };
+  });
   const [notes, setNotes] = useState(existing?.notes ?? '');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -739,7 +856,7 @@ export function SleepModal({
               type="datetime-local"
               required
               value={startedLocal}
-              onChange={(e) => setStartedLocal(e.target.value)}
+              onChange={(e) => handleStartedLocalChange(e.target.value)}
               className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
             />
           </div>
@@ -752,10 +869,15 @@ export function SleepModal({
               type="datetime-local"
               required
               value={endedLocal}
-              onChange={(e) => setEndedLocal(e.target.value)}
+              onChange={(e) => handleEndedLocalChange(e.target.value)}
               className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
             />
           </div>
+          <DurationField
+            id="sleep-duration"
+            value={durationStr}
+            onChange={handleDurationChange}
+          />
         </div>
 
         <div>
@@ -1249,11 +1371,22 @@ export function PumpingModal({
   const isEditingActive = Boolean(
     existing && !finishingActive && existing.endedAt === null,
   );
-  const [{ initialStartedLocal, initialEndedLocal }] = useState(() => {
+  const {
+    initialStartedLocal,
+    initialEndedLocal,
+    startedLocal,
+    endedLocal,
+    durationStr,
+    handleStartedLocalChange,
+    handleEndedLocalChange,
+    handleDurationChange,
+  } = useSyncedTimeRange(() => {
     const nowMs = Date.now();
     const nowStr = toLocalDateTimeInputValue(new Date(nowMs).toISOString());
     const defaultStartStr = toLocalDateTimeInputValue(
-      new Date(nowMs - DEFAULT_PUMPING_DURATION_MINUTES * 60 * 1000).toISOString(),
+      new Date(
+        nowMs - DEFAULT_PUMPING_DURATION_MINUTES * 60 * 1000,
+      ).toISOString(),
     );
     return {
       initialStartedLocal: target
@@ -1282,8 +1415,6 @@ export function PumpingModal({
       ? volumeMlToInputString(target.payload.rightVolumeMl, volumeUnit)
       : '',
   );
-  const [startedLocal, setStartedLocal] = useState(initialStartedLocal);
-  const [endedLocal, setEndedLocal] = useState(initialEndedLocal);
   const [notes, setNotes] = useState(target?.notes ?? '');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -1602,7 +1733,7 @@ export function PumpingModal({
               required
               disabled={Boolean(finishingActive)}
               value={startedLocal}
-              onChange={(e) => setStartedLocal(e.target.value)}
+              onChange={(e) => handleStartedLocalChange(e.target.value)}
               className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950"
             />
           </div>
@@ -1619,10 +1750,18 @@ export function PumpingModal({
                 type="datetime-local"
                 required
                 value={endedLocal}
-                onChange={(e) => setEndedLocal(e.target.value)}
+                onChange={(e) => handleEndedLocalChange(e.target.value)}
                 className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
               />
             </div>
+          )}
+          {!isEditingActive && (
+            <DurationField
+              id="pumping-duration"
+              value={durationStr}
+              disabled={Boolean(finishingActive)}
+              onChange={handleDurationChange}
+            />
           )}
         </div>
 
@@ -1693,7 +1832,16 @@ export function TummyTimeModal({
 }) {
   const { t } = useI18n();
   const isEditingActive = Boolean(existing && existing.endedAt === null);
-  const [{ initialStartedLocal, initialEndedLocal }] = useState(() => {
+  const {
+    initialStartedLocal,
+    initialEndedLocal,
+    startedLocal,
+    endedLocal,
+    durationStr,
+    handleStartedLocalChange,
+    handleEndedLocalChange,
+    handleDurationChange,
+  } = useSyncedTimeRange(() => {
     const nowMs = Date.now();
     const nowStr = toLocalDateTimeInputValue(new Date(nowMs).toISOString());
     const defaultStartStr = toLocalDateTimeInputValue(
@@ -1709,8 +1857,6 @@ export function TummyTimeModal({
     };
   });
 
-  const [startedLocal, setStartedLocal] = useState(initialStartedLocal);
-  const [endedLocal, setEndedLocal] = useState(initialEndedLocal);
   const [mood, setMood] = useState<TummyTimeMood | undefined>(
     existing?.payload.mood,
   );
@@ -1814,7 +1960,7 @@ export function TummyTimeModal({
               type="datetime-local"
               required
               value={startedLocal}
-              onChange={(e) => setStartedLocal(e.target.value)}
+              onChange={(e) => handleStartedLocalChange(e.target.value)}
               className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
             />
           </div>
@@ -1831,10 +1977,17 @@ export function TummyTimeModal({
                 type="datetime-local"
                 required
                 value={endedLocal}
-                onChange={(e) => setEndedLocal(e.target.value)}
+                onChange={(e) => handleEndedLocalChange(e.target.value)}
                 className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
               />
             </div>
+          )}
+          {!isEditingActive && (
+            <DurationField
+              id="tummy-duration"
+              value={durationStr}
+              onChange={handleDurationChange}
+            />
           )}
         </div>
 
