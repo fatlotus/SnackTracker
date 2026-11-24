@@ -1225,6 +1225,7 @@ export function SpitUpModal({
 // ============================================================================
 
 const PUMPING_SIDE_VALUES: readonly PumpingSide[] = ['left', 'right', 'both'];
+const DEFAULT_PUMPING_DURATION_MINUTES = 12;
 
 export function PumpingModal({
   babyId,
@@ -1252,7 +1253,7 @@ export function PumpingModal({
     const nowMs = Date.now();
     const nowStr = toLocalDateTimeInputValue(new Date(nowMs).toISOString());
     const defaultStartStr = toLocalDateTimeInputValue(
-      new Date(nowMs - 15 * 60 * 1000).toISOString(),
+      new Date(nowMs - DEFAULT_PUMPING_DURATION_MINUTES * 60 * 1000).toISOString(),
     );
     return {
       initialStartedLocal: target
