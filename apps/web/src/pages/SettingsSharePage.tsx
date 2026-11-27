@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import type {
-  Baby,
-  BabyInvitePublic,
-  BabyMember,
-  InviteRole,
-  User,
+import {
+  canInviteMembers,
+  canManageBaby,
+  canManageMember,
+  getAssignableRoles,
+  type Baby,
+  type BabyInvitePublic,
+  type BabyMember,
+  type BabyRole,
+  type InviteRole,
+  type User,
 } from '@baby-tracker/shared';
 import {
   Archive,
@@ -20,9 +25,11 @@ import {
 } from 'lucide-react';
 import {
   acceptInvite,
+  ApiError,
   createBabyInvite,
   listBabyMembers as fetchBabyMembersApi,
   removeBabyMember,
+  updateBabyMemberRole,
 } from '../lib/api.js';
 import {
   createBaby,
@@ -42,6 +49,7 @@ import {
 interface SettingsSharePageProps {
   user: User;
   baby: Baby;
+  activeRole: BabyRole;
   syncStatus: SyncStatus;
   theme: ThemePreference;
   volumeUnit: VolumeUnit;
@@ -54,6 +62,7 @@ interface SettingsSharePageProps {
 export function SettingsSharePage({
   user,
   baby,
+  activeRole,
   syncStatus,
   theme,
   volumeUnit,
@@ -74,18 +83,6 @@ export function SettingsSharePage({
   const [profileError, setProfileError] = useState<string | null>(null);
   const [confirmArchive, setConfirmArchive] = useState(false);
 
-  useEffect(() => {
-    setEditName(baby.name);
-    setEditDob(baby.dob);
-    setEditWeight(
-      baby.birthWeightGrams != null ? String(baby.birthWeightGrams) : '',
-    );
-    setEditNotes(baby.notes ?? '');
-    setProfileError(null);
-    setConfirmArchive(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baby.id]);
-
   // Add another baby
   const [showAddBaby, setShowAddBaby] = useState(false);
   const [newBabyName, setNewBabyName] = useState('');
@@ -95,11 +92,31 @@ export function SettingsSharePage({
   // Sharing & Members
   const [members, setMembers] = useState<BabyMember[]>([]);
   const [membersError, setMembersError] = useState<string | null>(null);
+  const [updatingMemberUserId, setUpdatingMemberUserId] = useState<
+    string | null
+  >(null);
   const [inviteRole, setInviteRole] = useState<InviteRole>('caregiver');
   const [generatedInvite, setGeneratedInvite] =
     useState<BabyInvitePublic | null>(null);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
+
+  useEffect(() => {
+    setEditName(baby.name);
+    setEditDob(baby.dob);
+    setEditWeight(
+      baby.birthWeightGrams != null ? String(baby.birthWeightGrams) : '',
+    );
+    setEditNotes(baby.notes ?? '');
+    setProfileError(null);
+    setConfirmArchive(false);
+    setMembers([]);
+    setMembersError(null);
+    setGeneratedInvite(null);
+    setInviteError(null);
+    setCopiedLink(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baby.id]);
 
   // Join another baby
   const [joinInput, setJoinInput] = useState('');
@@ -137,8 +154,25 @@ export function SettingsSharePage({
     };
   }, [loadMembers]);
 
+  const visibleMembers = members.filter(
+    (m) => m.babyId === baby.id && !m.deletedAt,
+  );
+  const effectiveRole: BabyRole =
+    visibleMembers.find((m) => m.userId === user.id)?.role ?? activeRole;
+  const assignableRoles = getAssignableRoles(effectiveRole);
+  const canInvite = canInviteMembers(effectiveRole) && assignableRoles.length > 0;
+  const canEditBaby = canManageBaby(effectiveRole);
+
+  useEffect(() => {
+    const roles = getAssignableRoles(effectiveRole);
+    if (roles.length > 0 && !roles.includes(inviteRole)) {
+      setInviteRole(roles.includes('caregiver') ? 'caregiver' : roles[0]!);
+    }
+  }, [effectiveRole, inviteRole]);
+
   async function handleSaveBaby(e: FormEvent) {
     e.preventDefault();
+    if (!canEditBaby) return;
     setProfileError(null);
     try {
       const w = editWeight.trim() ? Math.round(Number(editWeight)) : null;
@@ -158,6 +192,7 @@ export function SettingsSharePage({
   }
 
   async function handleArchiveBaby() {
+    if (!canEditBaby) return;
     setProfileError(null);
     try {
       await updateBaby(baby.id, { isArchived: true });
@@ -178,6 +213,7 @@ export function SettingsSharePage({
         name: newBabyName.trim(),
         dob: newBabyDob,
         createdByUserId: user.id,
+        createdByDisplayName: user.displayName,
       });
       setNewBabyName('');
       setShowAddBaby(false);
@@ -190,6 +226,7 @@ export function SettingsSharePage({
   }
 
   async function handleGenerateInvite() {
+    if (!canInvite) return;
     setInviteError(null);
     try {
       const res = await createBabyInvite(baby.id, {
@@ -221,6 +258,29 @@ export function SettingsSharePage({
     }
   }
 
+  async function handleUpdateMemberRole(
+    targetUserId: string,
+    nextRole: BabyRole,
+  ) {
+    setMembersError(null);
+    setUpdatingMemberUserId(targetUserId);
+    try {
+      await updateBabyMemberRole(baby.id, targetUserId, { role: nextRole });
+      await syncOnce();
+      await loadMembers();
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'LAST_PARENT') {
+        setMembersError(t('settings.err.lastParent'));
+      } else {
+        setMembersError(
+          err instanceof Error ? err.message : t('settings.err.updateRole'),
+        );
+      }
+    } finally {
+      setUpdatingMemberUserId(null);
+    }
+  }
+
   async function handleRemoveMember(targetUserId: string) {
     setMembersError(null);
     try {
@@ -228,9 +288,13 @@ export function SettingsSharePage({
       await syncOnce();
       await loadMembers();
     } catch (err) {
-      setMembersError(
-        err instanceof Error ? err.message : t('settings.err.removeMember'),
-      );
+      if (err instanceof ApiError && err.code === 'LAST_PARENT') {
+        setMembersError(t('settings.err.lastParent'));
+      } else {
+        setMembersError(
+          err instanceof Error ? err.message : t('settings.err.removeMember'),
+        );
+      }
     }
   }
 
@@ -261,13 +325,22 @@ export function SettingsSharePage({
         ? `/join/${generatedInvite.code}`
         : '';
 
-  const formatRole = (role: string) => {
-    if (locale === 'zh-CN') {
-      if (role === 'parent' || role === 'owner') return '家长';
-      if (role === 'caregiver') return '照护者';
-      if (role === 'viewer') return '查看者';
-    }
-    return role;
+  const formatRoleName = (role: BabyRole) => {
+    if (role === 'parent') return t('settings.roleName.parent');
+    if (role === 'caregiver') return t('settings.roleName.caregiver');
+    return t('settings.roleName.viewer');
+  };
+
+  const formatRoleOption = (role: BabyRole) => {
+    if (role === 'parent') return t('settings.role.parent');
+    if (role === 'caregiver') return t('settings.role.caregiver');
+    return t('settings.role.viewer');
+  };
+
+  const formatRolePerm = (role: BabyRole) => {
+    if (role === 'parent') return t('settings.rolePerm.parent');
+    if (role === 'caregiver') return t('settings.rolePerm.caregiver');
+    return t('settings.rolePerm.viewer');
   };
 
   const syncStateLabel =
@@ -374,9 +447,10 @@ export function SettingsSharePage({
                 id="edit-baby-name"
                 type="text"
                 required
+                disabled={!canEditBaby}
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
-                className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 text-sm disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950"
               />
             </div>
             <div>
@@ -390,9 +464,10 @@ export function SettingsSharePage({
                 id="edit-baby-dob"
                 type="date"
                 required
+                disabled={!canEditBaby}
                 value={editDob}
                 onChange={(e) => setEditDob(e.target.value)}
-                className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 text-sm disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950"
               />
             </div>
             <div>
@@ -407,9 +482,10 @@ export function SettingsSharePage({
                 type="number"
                 min={200}
                 max={20000}
+                disabled={!canEditBaby}
                 value={editWeight}
                 onChange={(e) => setEditWeight(e.target.value)}
-                className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 text-sm disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950"
               />
             </div>
           </div>
@@ -423,9 +499,10 @@ export function SettingsSharePage({
             <input
               id="edit-baby-notes"
               type="text"
+              disabled={!canEditBaby}
               value={editNotes}
               onChange={(e) => setEditNotes(e.target.value)}
-              className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+              className="bt-focus-ring min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 text-sm disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950"
             />
           </div>
           {profileError && (
@@ -433,51 +510,53 @@ export function SettingsSharePage({
               {profileError}
             </p>
           )}
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            {confirmArchive ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs font-medium text-rose-700 dark:text-rose-300">
-                  {t('settings.archiveConfirm', { name: baby.name })}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => void handleArchiveBaby()}
-                  className="bt-focus-ring inline-flex min-h-[44px] items-center rounded-xl bg-rose-600 px-3 text-xs font-semibold text-white hover:bg-rose-700"
-                >
-                  {t('settings.confirmArchive')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmArchive(false)}
-                  className="bt-focus-ring inline-flex min-h-[44px] items-center rounded-xl border border-slate-300 px-3 text-xs font-medium dark:border-slate-700"
-                >
-                  {t('common.cancel')}
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setConfirmArchive(true)}
-                className="bt-focus-ring inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-rose-200 px-3 text-xs font-medium text-rose-600 hover:bg-rose-50 dark:border-rose-900 dark:text-rose-400"
-              >
-                <Archive className="h-4 w-4" />
-                <span>{t('settings.archiveBaby')}</span>
-              </button>
-            )}
-            <button
-              type="submit"
-              className="bt-focus-ring inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-teal-600 px-4 text-sm font-semibold text-white hover:bg-teal-700"
-            >
-              {profileSaved ? (
-                <>
-                  <Check className="h-4 w-4" />
-                  <span>{t('common.saved')}</span>
-                </>
+          {canEditBaby && (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              {confirmArchive ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium text-rose-700 dark:text-rose-300">
+                    {t('settings.archiveConfirm', { name: baby.name })}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void handleArchiveBaby()}
+                    className="bt-focus-ring inline-flex min-h-[44px] items-center rounded-xl bg-rose-600 px-3 text-xs font-semibold text-white hover:bg-rose-700"
+                  >
+                    {t('settings.confirmArchive')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmArchive(false)}
+                    className="bt-focus-ring inline-flex min-h-[44px] items-center rounded-xl border border-slate-300 px-3 text-xs font-medium dark:border-slate-700"
+                  >
+                    {t('common.cancel')}
+                  </button>
+                </div>
               ) : (
-                <span>{t('settings.saveChanges')}</span>
+                <button
+                  type="button"
+                  onClick={() => setConfirmArchive(true)}
+                  className="bt-focus-ring inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-rose-200 px-3 text-xs font-medium text-rose-600 hover:bg-rose-50 dark:border-rose-900 dark:text-rose-400"
+                >
+                  <Archive className="h-4 w-4" />
+                  <span>{t('settings.archiveBaby')}</span>
+                </button>
               )}
-            </button>
-          </div>
+              <button
+                type="submit"
+                className="bt-focus-ring inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-teal-600 px-4 text-sm font-semibold text-white hover:bg-teal-700"
+              >
+                {profileSaved ? (
+                  <>
+                    <Check className="h-4 w-4" />
+                    <span>{t('common.saved')}</span>
+                  </>
+                ) : (
+                  <span>{t('settings.saveChanges')}</span>
+                )}
+              </button>
+            </div>
+          )}
         </form>
       </section>
 
@@ -490,38 +569,45 @@ export function SettingsSharePage({
           </h2>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            aria-label={t('settings.inviteRoleAria')}
-            value={inviteRole}
-            onChange={(e) => setInviteRole(e.target.value as InviteRole)}
-            className="bt-focus-ring min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
-          >
-            <option value="caregiver">{t('settings.role.caregiver')}</option>
-            <option value="viewer">{t('settings.role.viewer')}</option>
-          </select>
-          <button
-            type="button"
-            onClick={() => void handleGenerateInvite()}
-            className="bt-focus-ring inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-700"
-          >
-            <Link2 className="h-4 w-4" />
-            <span>{t('settings.generateInviteLink')}</span>
-          </button>
-        </div>
+        {canInvite && (
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              aria-label={t('settings.inviteRoleAria')}
+              value={inviteRole}
+              onChange={(e) => setInviteRole(e.target.value as InviteRole)}
+              className="bt-focus-ring min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+            >
+              {assignableRoles.map((role) => (
+                <option key={role} value={role}>
+                  {formatRoleOption(role)}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => void handleGenerateInvite()}
+              className="bt-focus-ring inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-700"
+            >
+              <Link2 className="h-4 w-4" />
+              <span>{t('settings.generateInviteLink')}</span>
+            </button>
+          </div>
+        )}
 
         {inviteError && (
-          <p className="text-sm text-rose-600 dark:text-rose-400">
+          <p role="alert" className="text-sm text-rose-600 dark:text-rose-400">
             {inviteError}
           </p>
         )}
 
-        {generatedInvite && (
+        {canInvite &&
+          generatedInvite &&
+          generatedInvite.babyId === baby.id && (
           <div className="space-y-2 rounded-xl border border-indigo-200 bg-indigo-50 p-3.5 dark:border-indigo-900 dark:bg-indigo-950/50">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-semibold text-indigo-900 dark:text-indigo-200">
                 {t('settings.codeLabel')} <code>{generatedInvite.code}</code> (
-                {formatRole(generatedInvite.role)})
+                {formatRoleName(generatedInvite.role)})
               </span>
               <button
                 type="button"
@@ -547,43 +633,90 @@ export function SettingsSharePage({
           </div>
         )}
 
+        {assignableRoles.length > 0 && (
+          <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 text-xs dark:border-slate-800 dark:bg-slate-800/40">
+            <p className="mb-1.5 font-semibold text-slate-700 dark:text-slate-200">
+              {t('settings.rolePermissionsTitle')}
+            </p>
+            <ul className="space-y-1 text-slate-600 dark:text-slate-300">
+              {assignableRoles.map((role) => (
+                <li key={role}>
+                  <strong className="font-semibold text-slate-800 dark:text-slate-100">
+                    {formatRoleName(role)}:
+                  </strong>{' '}
+                  {formatRolePerm(role)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {membersError && (
-          <p className="text-sm text-rose-600 dark:text-rose-400">
+          <p role="alert" className="text-sm text-rose-600 dark:text-rose-400">
             {membersError}
           </p>
         )}
 
         <div className="divide-y divide-slate-100 dark:divide-slate-800">
-          {members.map((m) => (
-            <div
-              key={m.id}
-              className="flex items-center justify-between py-2.5 text-sm"
-            >
-              <div>
-                <span className="font-medium">
-                  {m.displayName ?? m.userId}
-                  {m.userId === user.id ? t('settings.youSuffix') : ''}
-                </span>
-                <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs capitalize text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                  {formatRole(m.role)}
-                </span>
-              </div>
-              {m.role !== 'parent' && (
-                <button
-                  type="button"
-                  onClick={() => void handleRemoveMember(m.userId)}
-                  className="bt-focus-ring inline-flex min-h-[44px] items-center gap-1 rounded-lg px-2.5 text-xs font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-400"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  <span>
-                    {m.userId === user.id
-                      ? t('settings.leave')
-                      : t('settings.remove')}
+          {visibleMembers.map((m) => {
+            const isSelf = m.userId === user.id;
+            const canManageThisMember =
+              !isSelf && canManageMember(effectiveRole, m.role);
+            const canRemoveThisMember = isSelf || canManageThisMember;
+            const memberLabel = m.displayName ?? m.userId;
+
+            return (
+              <div
+                key={m.id}
+                className="flex flex-wrap items-center justify-between gap-2 py-2.5 text-sm"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">
+                    {memberLabel}
+                    {isSelf ? t('settings.youSuffix') : ''}
                   </span>
-                </button>
-              )}
-            </div>
-          ))}
+                  {canManageThisMember && assignableRoles.length > 0 ? (
+                    <select
+                      aria-label={t('settings.memberRoleAria', {
+                        name: memberLabel,
+                      })}
+                      value={m.role}
+                      disabled={updatingMemberUserId === m.userId}
+                      onChange={(e) =>
+                        void handleUpdateMemberRole(
+                          m.userId,
+                          e.target.value as BabyRole,
+                        )
+                      }
+                      className="bt-focus-ring min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-xs font-medium disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950"
+                    >
+                      {assignableRoles.map((role) => (
+                        <option key={role} value={role}>
+                          {formatRoleName(role)}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                      {formatRoleName(m.role)}
+                    </span>
+                  )}
+                </div>
+                {canRemoveThisMember && (
+                  <button
+                    type="button"
+                    onClick={() => void handleRemoveMember(m.userId)}
+                    className="bt-focus-ring inline-flex min-h-[44px] items-center gap-1 rounded-lg px-2.5 text-xs font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-400"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>
+                      {isSelf ? t('settings.leave') : t('settings.remove')}
+                    </span>
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
 
         {/* Join another baby */}

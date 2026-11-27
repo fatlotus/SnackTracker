@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import {
   addDays,
   computeDateRangeStats,
@@ -8,11 +8,23 @@ import {
   exportEventsToCsv,
   generatePediatricianSummary,
   localDayBounds,
+  parseBabyDataJson,
   type Baby,
+  type ImportBabyJson,
   type TrackingEvent,
 } from '@baby-tracker/shared';
-import { Check, Copy, Download, FileJson, FileSpreadsheet, Printer } from 'lucide-react';
+import {
+  AlertTriangle,
+  Check,
+  Copy,
+  Download,
+  FileJson,
+  FileSpreadsheet,
+  Printer,
+  Upload,
+} from 'lucide-react';
 import { useI18n } from '../lib/i18n.js';
+import { importEventsForBaby } from '../lib/store.js';
 import {
   downloadTextFile,
   getLocalTimeZone,
@@ -22,11 +34,22 @@ import {
 
 type Preset = '24h' | '7d' | '14d' | '30d' | 'custom';
 
+const MAX_IMPORT_FILE_BYTES = 20 * 1024 * 1024;
+
+interface ImportPreviewState {
+  fileName: string;
+  data: ImportBabyJson;
+}
+
 interface ExportPageProps {
   baby: Baby;
   events: TrackingEvent[];
   volumeUnit: VolumeUnit;
   nowMs: number;
+  userId: string;
+  userName?: string | null;
+  canWrite?: boolean;
+  canAccessPumping?: boolean;
 }
 
 export function ExportPage({
@@ -34,6 +57,10 @@ export function ExportPage({
   events,
   volumeUnit,
   nowMs,
+  userId,
+  userName = null,
+  canWrite = true,
+  canAccessPumping = true,
 }: ExportPageProps) {
   const { t, locale, formatDurationShort, formatVolume } = useI18n();
   const timeZone = getLocalTimeZone();
@@ -43,6 +70,26 @@ export function ExportPage({
   const [customStart, setCustomStart] = useState(() => addDays(todayKey, -6));
   const [customEnd, setCustomEnd] = useState(todayKey);
   const [copied, setCopied] = useState(false);
+
+  // JSON Backup Import state
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [importPreview, setImportPreview] = useState<ImportPreviewState | null>(
+    null,
+  );
+  const [overwriteExisting, setOverwriteExisting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importSuccess, setImportSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    setImportPreview(null);
+    setOverwriteExisting(false);
+    setImportError(null);
+    setImportSuccess(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  }, [baby.id]);
 
   const startDateKey =
     preset === '24h'
@@ -57,9 +104,19 @@ export function ExportPage({
 
   const endDateKey = preset === 'custom' ? customEnd : todayKey;
 
+  const visibleEvents = canAccessPumping
+    ? events
+    : events.filter((e) => e.type !== 'pumping');
+
   const validRange = startDateKey <= endDateKey;
   const dailyStats = validRange
-    ? computeDateRangeStats(events, startDateKey, endDateKey, timeZone, nowMs)
+    ? computeDateRangeStats(
+        visibleEvents,
+        startDateKey,
+        endDateKey,
+        timeZone,
+        nowMs,
+      )
     : [];
   const { days, totals, averagesPerDay } = computePeriodAverages(dailyStats);
   const daysLabel =
@@ -71,7 +128,7 @@ export function ExportPage({
     ? (() => {
         const rangeStartMs = localDayBounds(startDateKey, timeZone).startMs;
         const rangeEndMs = localDayBounds(endDateKey, timeZone).endMs;
-        return events.filter((e) => {
+        return visibleEvents.filter((e) => {
           if (e.deletedAt != null) return false;
           const evStartMs = Date.parse(e.startedAt);
           const evEndMs = e.endedAt ? Date.parse(e.endedAt) : nowMs;
@@ -86,7 +143,11 @@ export function ExportPage({
   const slugName = baby.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'baby';
 
   function handleDownloadEventsCsv() {
-    const csv = exportEventsToCsv(rangeEvents, { timeZone, nowMs });
+    const csv = exportEventsToCsv(rangeEvents, {
+      timeZone,
+      nowMs,
+      includePumping: canAccessPumping,
+    });
     downloadTextFile(
       `${slugName}-events-${startDateKey}-to-${endDateKey}.csv`,
       csv,
@@ -95,7 +156,9 @@ export function ExportPage({
   }
 
   function handleDownloadDailyStatsCsv() {
-    const csv = exportDailyStatsToCsv(dailyStats);
+    const csv = exportDailyStatsToCsv(dailyStats, {
+      includePumping: canAccessPumping,
+    });
     downloadTextFile(
       `${slugName}-daily-stats-${startDateKey}-to-${endDateKey}.csv`,
       csv,
@@ -106,11 +169,12 @@ export function ExportPage({
   function handleDownloadJson() {
     const jsonObj = exportBabyDataToJson({
       baby,
-      events,
+      events: visibleEvents,
       startDateKey,
       endDateKey,
       timeZone,
       nowMs,
+      includePumping: canAccessPumping,
     });
     downloadTextFile(
       `${slugName}-backup-${startDateKey}-to-${endDateKey}.json`,
@@ -122,12 +186,13 @@ export function ExportPage({
   async function handleCopySummary() {
     const summaryText = generatePediatricianSummary({
       baby,
-      events,
+      events: visibleEvents,
       startDateKey,
       endDateKey,
       timeZone,
       format: 'text',
       nowMs,
+      includePumping: canAccessPumping,
     });
     try {
       await navigator.clipboard.writeText(summaryText);
@@ -144,6 +209,137 @@ export function ExportPage({
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
     }
+  }
+
+  async function handleFileSelect(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    setImportError(null);
+    setImportSuccess(null);
+    setImportPreview(null);
+    setOverwriteExisting(false);
+    if (!file) return;
+
+    if (file.size > MAX_IMPORT_FILE_BYTES) {
+      setImportError(t('export.importErrorTooLarge'));
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const parsed = parseBabyDataJson(text);
+      if (!parsed.ok) {
+        if (parsed.error === 'invalid_json') {
+          setImportError(t('export.importErrorInvalidJson'));
+        } else if (parsed.error === 'unsupported_version') {
+          setImportError(t('export.importErrorUnsupportedVersion'));
+        } else {
+          setImportError(
+            t('export.importErrorValidation', { detail: parsed.message }),
+          );
+        }
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        return;
+      }
+
+      setImportPreview({ fileName: file.name, data: parsed.data });
+    } catch (err) {
+      setImportError(
+        t('export.importErrorGeneric', {
+          detail: err instanceof Error ? err.message : 'Unknown error',
+        }),
+      );
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  const importDryRun = (() => {
+    if (!importPreview) return null;
+    const isSameBaby = importPreview.data.baby.id === baby.id;
+    const existingActiveIds = new Set(
+      events.filter((ev) => !ev.deletedAt).map((ev) => ev.id),
+    );
+
+    let totalInFile = 0;
+    let pumpingSkippedCount = 0;
+    let alreadyExistingCount = 0;
+    let toImportCount = 0;
+
+    for (const ev of importPreview.data.events) {
+      if (ev.deletedAt != null) continue;
+      totalInFile += 1;
+      if (!canAccessPumping && ev.type === 'pumping') {
+        pumpingSkippedCount += 1;
+        continue;
+      }
+      if (isSameBaby && existingActiveIds.has(ev.id)) {
+        alreadyExistingCount += 1;
+        if (overwriteExisting) {
+          toImportCount += 1;
+        }
+      } else {
+        toImportCount += 1;
+      }
+    }
+
+    return {
+      isSameBaby,
+      totalInFile,
+      pumpingSkippedCount,
+      alreadyExistingCount,
+      toImportCount,
+    };
+  })();
+
+  async function handleConfirmImport() {
+    if (!importPreview || !canWrite || importing) return;
+    setImporting(true);
+    setImportError(null);
+    setImportSuccess(null);
+    try {
+      const result = await importEventsForBaby({
+        babyId: baby.id,
+        backupBabyId: importPreview.data.baby.id,
+        events: importPreview.data.events,
+        userId,
+        userName,
+        allowPumping: canAccessPumping,
+        overwriteExisting,
+      });
+      const writtenCount = result.importedCount + result.overwrittenCount;
+      const skippedCount =
+        result.skippedExistingCount +
+        result.skippedPumpingCount +
+        result.skippedDeletedCount;
+      const skippedPart =
+        skippedCount > 0
+          ? t('export.importSuccessSkipped', { count: skippedCount })
+          : '';
+      setImportSuccess(
+        t('export.importSuccess', {
+          imported: writtenCount,
+          skippedPart,
+        }),
+      );
+      setImportPreview(null);
+      setOverwriteExisting(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (err) {
+      setImportError(
+        t('export.importErrorGeneric', {
+          detail: err instanceof Error ? err.message : 'Unknown error',
+        }),
+      );
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  function handleCancelImport() {
+    setImportPreview(null);
+    setOverwriteExisting(false);
+    setImportError(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
   return (
@@ -282,17 +478,19 @@ export function ExportPage({
               {t('export.spitUpsTotal', { count: totals.spitUpCount })}
             </p>
           </div>
-          <div className="bt-card bt-card-pumping p-4">
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              {t('export.pumpingAvgDay')}
-            </p>
-            <p className="tabular-nums-clock mt-1 text-lg font-bold">
-              {formatVolume(averagesPerDay.pumpingTotalMl, volumeUnit)}
-            </p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              {t('export.pumpingSessionsTotal', { count: totals.pumpingCount })}
-            </p>
-          </div>
+          {canAccessPumping && (
+            <div className="bt-card bt-card-pumping p-4">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {t('export.pumpingAvgDay')}
+              </p>
+              <p className="tabular-nums-clock mt-1 text-lg font-bold">
+                {formatVolume(averagesPerDay.pumpingTotalMl, volumeUnit)}
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {t('export.pumpingSessionsTotal', { count: totals.pumpingCount })}
+              </p>
+            </div>
+          )}
           <div className="bt-card bt-card-tummy p-4">
             <p className="text-xs text-slate-500 dark:text-slate-400">
               {t('export.tummyTimeAvgDay')}
@@ -369,6 +567,143 @@ export function ExportPage({
             <span>{t('export.printClinicalReport')}</span>
           </button>
         </div>
+
+        {/* Restore from JSON Backup */}
+        {canWrite && (
+          <section className="bt-card space-y-4 p-4">
+            <div>
+              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                {t('export.importTitle')}
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {t('export.importSubtitle', { name: baby.name })}
+              </p>
+            </div>
+
+            <div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/json,.json"
+                onChange={(e) => void handleFileSelect(e)}
+                className="sr-only"
+                aria-label={t('export.importSelectFile')}
+              />
+              <button
+                type="button"
+                disabled={importing}
+                onClick={() => fileInputRef.current?.click()}
+                className="bt-focus-ring inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800"
+              >
+                <Upload className="h-4 w-4" />
+                <span>{t('export.importSelectFile')}</span>
+              </button>
+            </div>
+
+            {importError && (
+              <div
+                role="alert"
+                className="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-sm text-rose-700 dark:border-rose-800 dark:bg-rose-950/60 dark:text-rose-300"
+              >
+                {importError}
+              </div>
+            )}
+
+            {importSuccess && (
+              <div
+                role="status"
+                className="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200"
+              >
+                {importSuccess}
+              </div>
+            )}
+
+            {importPreview && importDryRun && (
+              <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-700 dark:bg-slate-800/40">
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    {t('export.importPreviewTitle', {
+                      fileName: importPreview.fileName,
+                    })}
+                  </p>
+                  <p className="text-xs text-slate-600 dark:text-slate-300">
+                    {t('export.importBackupBaby', {
+                      name: importPreview.data.baby.name,
+                      dob: importPreview.data.baby.dob,
+                    })}
+                  </p>
+                </div>
+
+                {!importDryRun.isSameBaby && (
+                  <div
+                    role="alert"
+                    className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200"
+                  >
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>
+                      {t('export.importDifferentBabyWarning', {
+                        backupName: importPreview.data.baby.name,
+                        activeName: baby.name,
+                      })}
+                    </span>
+                  </div>
+                )}
+
+                <p className="text-xs font-medium text-slate-700 dark:text-slate-200">
+                  {t('export.importSummaryCounts', {
+                    total: importDryRun.totalInFile,
+                    toImport: importDryRun.toImportCount,
+                    existing: importDryRun.alreadyExistingCount,
+                  })}
+                </p>
+
+                {!canAccessPumping && importDryRun.pumpingSkippedCount > 0 && (
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    {t('export.importPumpingSkipped', {
+                      count: importDryRun.pumpingSkippedCount,
+                    })}
+                  </p>
+                )}
+
+                {importDryRun.isSameBaby &&
+                  importDryRun.alreadyExistingCount > 0 && (
+                    <label className="flex min-h-[44px] cursor-pointer items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-200">
+                      <input
+                        type="checkbox"
+                        checked={overwriteExisting}
+                        onChange={(e) => setOverwriteExisting(e.target.checked)}
+                        className="bt-focus-ring h-4 w-4 rounded border-slate-300 text-teal-600"
+                      />
+                      <span>{t('export.importOverwriteLabel')}</span>
+                    </label>
+                  )}
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    disabled={importing || importDryRun.toImportCount === 0}
+                    onClick={() => void handleConfirmImport()}
+                    className="bt-focus-ring inline-flex min-h-[44px] items-center justify-center rounded-xl bg-teal-600 px-4 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-50"
+                  >
+                    {importing
+                      ? t('export.importImporting')
+                      : t('export.importConfirm', {
+                          count: importDryRun.toImportCount,
+                        })}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={importing}
+                    onClick={handleCancelImport}
+                    className="bt-focus-ring inline-flex min-h-[44px] items-center justify-center rounded-xl border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    {t('export.importCancel')}
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+        )}
       </div>
 
       {/* Printable Clinical Report (.print-only) */}
@@ -418,12 +753,14 @@ export function ExportPage({
               ? `共 ${totals.spitUpCount} 次（日均 ${averagesPerDay.spitUpCount.toFixed(1)} 次）`
               : `${totals.spitUpCount} total (${averagesPerDay.spitUpCount.toFixed(1)}/day avg)`}
           </div>
-          <div>
-            <strong>{t('export.col.pumping')}：</strong>
-            {locale === 'zh-CN'
-              ? `共 ${totals.pumpingCount} 次（总计 ${Math.round(totals.pumpingTotalMl)} ${t('common.ml')}，日均 ${Math.round(averagesPerDay.pumpingTotalMl)} ${t('common.ml')}）`
-              : `${totals.pumpingCount} sessions (${Math.round(totals.pumpingTotalMl)} ml total, ${Math.round(averagesPerDay.pumpingTotalMl)} ml/day avg)`}
-          </div>
+          {canAccessPumping && (
+            <div>
+              <strong>{t('export.col.pumping')}：</strong>
+              {locale === 'zh-CN'
+                ? `共 ${totals.pumpingCount} 次（总计 ${Math.round(totals.pumpingTotalMl)} ${t('common.ml')}，日均 ${Math.round(averagesPerDay.pumpingTotalMl)} ${t('common.ml')}）`
+                : `${totals.pumpingCount} sessions (${Math.round(totals.pumpingTotalMl)} ml total, ${Math.round(averagesPerDay.pumpingTotalMl)} ml/day avg)`}
+            </div>
+          )}
           <div>
             <strong>{t('export.col.tummyTime')}：</strong>
             {locale === 'zh-CN'
@@ -446,7 +783,9 @@ export function ExportPage({
                 <th className="py-1 pr-2">{t('export.col.bottle')}</th>
                 <th className="py-1 pr-2">{t('export.col.wetPoopy')}</th>
                 <th className="py-1 pr-2">{t('export.col.spitUp')}</th>
-                <th className="py-1 pr-2">{t('export.col.pumping')}</th>
+                {canAccessPumping && (
+                  <th className="py-1 pr-2">{t('export.col.pumping')}</th>
+                )}
                 <th className="py-1">{t('export.col.tummyTime')}</th>
               </tr>
             </thead>
@@ -472,9 +811,11 @@ export function ExportPage({
                   <td className="tabular-nums-clock py-1 pr-2">
                     {d.spitUpCount}
                   </td>
-                  <td className="tabular-nums-clock py-1 pr-2">
-                    {Math.round(d.pumpingTotalMl)} {t('common.ml')}
-                  </td>
+                  {canAccessPumping && (
+                    <td className="tabular-nums-clock py-1 pr-2">
+                      {Math.round(d.pumpingTotalMl)} {t('common.ml')}
+                    </td>
+                  )}
                   <td className="tabular-nums-clock py-1">
                     {formatDurationShort(d.tummyTimeTotalSeconds)}
                   </td>
