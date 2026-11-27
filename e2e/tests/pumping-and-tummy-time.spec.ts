@@ -90,7 +90,7 @@ test.describe('Pumping & Tummy Time Tracking', () => {
     // Start Tummy Time -> MUST auto-end active sleep
     const tummyCard = page.getByRole('region', { name: 'Tummy Time' });
     await expect(tummyCard).toBeVisible();
-    await tummyCard.getByRole('button', { name: 'Start Timer' }).click();
+    await tummyCard.getByRole('button', { name: 'Start Tummy Time' }).click();
 
     await expect(tummyCard.getByText('Tummy time in progress')).toBeVisible();
     await expect(sleepCard.getByText('Sleeping now')).toBeHidden();
@@ -106,8 +106,8 @@ test.describe('Pumping & Tummy Time Tracking', () => {
     await tummyReloaded.getByRole('button', { name: 'Finish' }).click();
     await expect(tummyReloaded.getByText('Tummy time in progress')).toBeHidden();
 
-    // Quick Entry manual log with mood & notes
-    await tummyReloaded.getByRole('button', { name: 'Quick Entry' }).click();
+    // Manual log with mood & notes
+    await tummyReloaded.getByRole('button', { name: 'Log' }).click();
     const dialog = page.getByRole('dialog', { name: 'Log Tummy Time' });
     await expect(dialog).toBeVisible();
     await dialog.getByRole('button', { name: 'Happy', exact: true }).click();
@@ -150,14 +150,14 @@ test.describe('Pumping & Tummy Time Tracking', () => {
     // Offline create Pumping & Tummy Time -> reload -> reconnect
     await goOffline(context);
     const pumpingCard = page.getByRole('region', { name: 'Pumping' });
-    await pumpingCard.getByRole('button', { name: 'Quick Entry' }).click();
+    await pumpingCard.getByRole('button', { name: 'Log' }).click();
     const pumpDialog = page.getByRole('dialog', { name: 'Log Pumping' });
     await pumpDialog.locator('#pumping-volume').fill('80');
     await pumpDialog.getByRole('button', { name: 'Save Pumping' }).click();
     await expect(pumpDialog).toBeHidden();
 
     const tummyCard = page.getByRole('region', { name: 'Tummy Time' });
-    await tummyCard.getByRole('button', { name: 'Quick Entry' }).click();
+    await tummyCard.getByRole('button', { name: 'Log' }).click();
     const tummyDialog = page.getByRole('dialog', { name: 'Log Tummy Time' });
     await tummyDialog.getByRole('button', { name: 'Save Tummy Time' }).click();
     await expect(tummyDialog).toBeHidden();
@@ -227,7 +227,7 @@ test.describe('Pumping & Tummy Time Tracking', () => {
     await expect(pumpingCard.getByText('Pumping in progress')).toBeVisible();
 
     const tummyCard = page.getByRole('region', { name: 'Tummy Time' });
-    await tummyCard.getByRole('button', { name: 'Start Timer' }).click();
+    await tummyCard.getByRole('button', { name: 'Start Tummy Time' }).click();
     await expect(tummyCard.getByText('Tummy time in progress')).toBeVisible();
 
     // Go to Timeline and edit BOTH active events (<1m elapsed) without stopping them
@@ -304,7 +304,7 @@ test.describe('Pumping & Tummy Time Tracking', () => {
     await setupAuthenticatedBaby(page, { babyName: 'Luna' });
 
     const pumpingCard = page.getByRole('region', { name: 'Pumping' });
-    await pumpingCard.getByRole('button', { name: 'Quick Entry' }).click();
+    await pumpingCard.getByRole('button', { name: 'Log' }).click();
     const dialog = page.getByRole('dialog', { name: 'Log Pumping' });
     await expect(dialog).toBeVisible();
 
@@ -394,7 +394,10 @@ test.describe('Pumping & Tummy Time Tracking', () => {
     await finishDialog.getByRole('button', { name: 'Cancel' }).click();
 
     // Bottle Feed modal duration sync
-    await page.getByRole('button', { name: /Log Bottle/i }).first().click();
+    await page
+      .getByRole('region', { name: 'Bottle Feeding' })
+      .getByRole('button', { name: 'Log' })
+      .click();
     const bottleDialog = page.getByRole('dialog', { name: 'Log Bottle Feed' });
     await expect(bottleDialog.locator('#bottle-duration')).toHaveValue('0');
     await bottleDialog.locator('#bottle-end').fill('2026-05-10T10:30');
@@ -407,7 +410,7 @@ test.describe('Pumping & Tummy Time Tracking', () => {
     // Sleep modal duration sync (including midnight rollover)
     await page
       .getByRole('region', { name: 'Sleep' })
-      .getByRole('button', { name: /^Manual$/i })
+      .getByRole('button', { name: 'Log' })
       .click();
     const sleepDialog = page.getByRole('dialog', { name: 'Log Sleep' });
     await expect(sleepDialog.locator('#sleep-duration')).toHaveValue('45');
@@ -421,7 +424,7 @@ test.describe('Pumping & Tummy Time Tracking', () => {
     // Tummy Time modal duration sync
     await page
       .getByRole('region', { name: 'Tummy Time' })
-      .getByRole('button', { name: 'Quick Entry' })
+      .getByRole('button', { name: 'Log' })
       .click();
     const tummyDialog = page.getByRole('dialog', { name: 'Log Tummy Time' });
     await expect(tummyDialog.locator('#tummy-duration')).toHaveValue('5');

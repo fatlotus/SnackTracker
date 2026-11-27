@@ -631,8 +631,10 @@ test.describe('F2: Breastfeeding Tracking (Tier 1)', () => {
   }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
-    // 1st Manual button on dashboard is in the Breastfeeding card
-    await page.getByRole('button', { name: /^Manual$/i }).first().click();
+    await page
+      .getByRole('region', { name: 'Breastfeeding' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
 
     const start = new Date(Date.now() - 15 * 60_000);
     await fillTimeOrDateTime(page.getByLabel(/start time/i).first(), start);
@@ -641,7 +643,7 @@ test.describe('F2: Breastfeeding Tracking (Tier 1)', () => {
     await page.getByLabel(/right \(min\)/i).first().fill('0');
     await page.getByLabel(/notes/i).first().fill('Good latch on left side');
 
-    await page.getByRole('button', { name: /^Save$/i }).last().click();
+    await page.getByRole('button', { name: /save breastfeed/i }).last().click();
 
     await page.getByRole('button', { name: /^Timeline$/i }).first().click();
     await expect(
@@ -671,7 +673,10 @@ test.describe('F3: Bottle Feeding Tracking (Tier 1)', () => {
   test('logs a bottle feed with volume in ml and milk type', async ({ page }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
-    await page.getByRole('button', { name: /log bottle/i }).first().click();
+    await page
+      .getByRole('region', { name: 'Bottle Feeding' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
 
     const volumeInput = page
       .getByLabel(/volume|amount|ml/i)
@@ -690,7 +695,10 @@ test.describe('F3: Bottle Feeding Tracking (Tier 1)', () => {
   test('allows 0 ml bottle feed entry', async ({ page }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
-    await page.getByRole('button', { name: /log bottle/i }).first().click();
+    await page
+      .getByRole('region', { name: 'Bottle Feeding' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
 
     const volumeInput = page
       .getByLabel(/volume|amount|ml/i)
@@ -710,7 +718,7 @@ test.describe('F3: Bottle Feeding Tracking (Tier 1)', () => {
     await page.getByRole('button', { name: /start bottle/i }).first().click();
 
     const finishBtn = page.getByRole('button', {
-      name: /finish & enter volume|^finish$/i,
+      name: /finish & log volume|^finish$/i,
     });
     await expect(finishBtn.first()).toBeVisible();
     await page.waitForTimeout(1100);
@@ -732,7 +740,10 @@ test.describe('F3: Bottle Feeding Tracking (Tier 1)', () => {
   }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
-    await page.getByRole('button', { name: /log bottle/i }).first().click();
+    await page
+      .getByRole('region', { name: 'Bottle Feeding' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
 
     const volumeInput = page
       .getByLabel(/volume|amount|ml/i)
@@ -755,7 +766,10 @@ test.describe('F3: Bottle Feeding Tracking (Tier 1)', () => {
   }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
-    await page.getByRole('button', { name: /log bottle/i }).first().click();
+    await page
+      .getByRole('region', { name: 'Bottle Feeding' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
     const volumeInput = page
       .getByLabel(/volume|amount|ml/i)
       .or(page.getByPlaceholder(/ml|volume/i));
@@ -788,8 +802,10 @@ test.describe('F4: Sleep Tracking (Tier 1)', () => {
   test('logs a manual night sleep with location (crib)', async ({ page }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
-    // 2nd Manual button on dashboard is in the Sleep card
-    await page.getByRole('button', { name: /^Manual$/i }).nth(1).click();
+    await page
+      .getByRole('region', { name: 'Sleep' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
 
     await page.getByRole('dialog').getByRole('button', { name: /night sleep/i }).click();
     await page.getByLabel(/location/i).first().selectOption('crib');
@@ -824,7 +840,7 @@ test.describe('F4: Sleep Tracking (Tier 1)', () => {
       page.getByRole('button', { name: /^Wake Up$/i }),
     ).toHaveCount(0);
     await expect(
-      page.getByRole('button', { name: /finish.*enter volume/i }).first(),
+      page.getByRole('button', { name: /finish.*log volume/i }).first(),
     ).toBeVisible();
   });
 
@@ -856,7 +872,10 @@ test.describe('F4: Sleep Tracking (Tier 1)', () => {
   test('displays total sleep duration in daily stats', async ({ page }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
-    await page.getByRole('button', { name: /^Manual$/i }).nth(1).click();
+    await page
+      .getByRole('region', { name: 'Sleep' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
 
     const end = new Date();
     const start = new Date(end.getTime() - 60 * 60_000);
@@ -874,7 +893,10 @@ test.describe('F4: Sleep Tracking (Tier 1)', () => {
   }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
-    await page.getByRole('button', { name: /^Manual$/i }).nth(1).click();
+    await page
+      .getByRole('region', { name: 'Sleep' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
     const end = new Date();
     const start = new Date(end.getTime() - 45 * 60_000);
     await fillTimeOrDateTime(page.getByLabel(/fell asleep/i).first(), start);
@@ -937,7 +959,10 @@ test.describe('F5: Diaper Tracking (Tier 1)', () => {
   }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
-    await page.getByRole('button', { name: /^Details$/i }).first().click();
+    await page
+      .getByRole('region', { name: '1-Tap Diaper Log' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
 
     await page.getByRole('dialog').getByRole('button', { name: /^poopy$/i }).click();
 
@@ -1013,7 +1038,10 @@ test.describe('F6: Spit-Up Tracking (Tier 1)', () => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
     // First log a bottle feed
-    await page.getByRole('button', { name: /log bottle/i }).first().click();
+    await page
+      .getByRole('region', { name: 'Bottle Feeding' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
     await page
       .getByLabel(/volume|amount|ml/i)
       .or(page.getByPlaceholder(/ml|volume/i))

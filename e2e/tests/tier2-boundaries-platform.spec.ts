@@ -1598,7 +1598,9 @@ test.describe('F12: Mobile-First + Laptop UI — Tier 2 Boundaries', () => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await setupAuthenticatedBaby(page, { babyName: 'KeyboardBaby' });
 
-    const bottleBtn = page.getByRole('button', { name: /log bottle/i }).first();
+    const bottleBtn = page
+      .getByRole('region', { name: 'Bottle Feeding' })
+      .getByRole('button', { name: /^Log$/i });
     await bottleBtn.click();
 
     const dialog = page.getByRole('dialog').first();

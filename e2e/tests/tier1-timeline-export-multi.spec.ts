@@ -33,7 +33,10 @@ async function logDiaperViaUI(
 }
 
 async function logBottleViaUI(page: Page, volumeMl: number): Promise<void> {
-  await page.getByRole('button', { name: /log bottle/i }).first().click();
+  await page
+    .getByRole('region', { name: 'Bottle Feeding' })
+    .getByRole('button', { name: /^Log$/i })
+    .click();
 
   const volumeInput = page
     .getByLabel(/volume|amount|ml/i)

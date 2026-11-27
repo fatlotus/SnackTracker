@@ -100,7 +100,10 @@ test.describe('Tier 6: i18n (en-US / zh-CN) & Distinctive Modern Styling', () =>
       await expect(page.getByText(/今日汇总/)).toBeVisible();
 
       // Tracking modal in Chinese
-      await page.getByRole('button', { name: '记录奶瓶' }).click();
+      await page
+        .getByRole('region', { name: '奶瓶喂养' })
+        .getByRole('button', { name: '记录' })
+        .click();
       await expect(
         page.getByRole('heading', { name: '记录奶瓶喂养' }),
       ).toBeVisible();
@@ -248,4 +251,78 @@ test.describe('Tier 6: i18n (en-US / zh-CN) & Distinctive Modern Styling', () =>
     }
     expect(new Set(darkColors).size).toBe(5);
   });
+
+  test('renders unified dashboard card headers, idle actions, and modal submit labels', async ({
+    page,
+  }) => {
+    await setupAuthenticatedBaby(page, { babyName: 'UniformBaby' });
+
+    // Every modal-backed live/1-tap card has a uniform top-right "Log" header button
+    for (const regionName of [
+      'Breastfeeding',
+      'Bottle Feeding',
+      'Sleep',
+      '1-Tap Diaper Log',
+      'Pumping',
+      'Tummy Time',
+    ]) {
+      const card = page.getByRole('region', { name: regionName });
+      await expect(
+        card.getByRole('button', { name: 'Log', exact: true }),
+      ).toHaveCount(1);
+    }
+
+    // No redundant Quick Entry buttons remain anywhere on the dashboard
+    await expect(
+      page.getByRole('button', { name: /quick entry/i }),
+    ).toHaveCount(0);
+
+    // Consistent Start <Activity> / Start <X> verbs across timer cards
+    await expect(
+      page
+        .getByRole('region', { name: 'Bottle Feeding' })
+        .getByRole('button', { name: 'Start Bottle', exact: true }),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByRole('region', { name: 'Pumping' })
+        .getByRole('button', { name: 'Start Pump', exact: true }),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByRole('region', { name: 'Tummy Time' })
+        .getByRole('button', { name: 'Start Tummy Time', exact: true }),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByRole('region', { name: 'Sleep' })
+        .getByRole('button', { name: 'Start Nap', exact: true }),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByRole('region', { name: 'Sleep' })
+        .getByRole('button', { name: 'Start Night', exact: true }),
+    ).toBeVisible();
+
+    // Spit-Up card has clean "Log Spit-Up" button (no literal "+ " prefix) and no header Log button
+    const spitUpCard = page.getByRole('region', { name: 'Spit-Up' });
+    await expect(
+      spitUpCard.getByRole('button', { name: 'Log', exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      spitUpCard.getByRole('button', { name: 'Log Spit-Up', exact: true }),
+    ).toBeVisible();
+
+    // BreastFeedModal submit button aligns with Save <Entity> naming
+    await page
+      .getByRole('region', { name: 'Breastfeeding' })
+      .getByRole('button', { name: 'Log', exact: true })
+      .click();
+    const breastDialog = page.getByRole('dialog', { name: 'Log Breastfeed' });
+    await expect(
+      breastDialog.getByRole('button', { name: 'Save Breastfeed', exact: true }),
+    ).toBeVisible();
+    await breastDialog.getByRole('button', { name: 'Cancel' }).click();
+  });
 });
+

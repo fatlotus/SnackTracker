@@ -63,7 +63,10 @@ test.describe('Tier 4: Real-World End-to-End Scenarios', () => {
 
     await page.getByRole('button', { name: /^wet$/i }).first().click();
 
-    await page.getByRole('button', { name: /log bottle/i }).first().click();
+    await page
+      .getByRole('region', { name: 'Bottle Feeding' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
     const volumeInput = page
       .getByLabel(/volume|amount|ml/i)
       .or(page.getByPlaceholder(/ml|volume|amount/i))
@@ -162,7 +165,10 @@ test.describe('Tier 4: Real-World End-to-End Scenarios', () => {
       ).toContainText('SharedSyncBaby');
 
       // Parent 1 logs a bottle feed via UI
-      await page1.getByRole('button', { name: /log bottle/i }).first().click();
+      await page1
+        .getByRole('region', { name: 'Bottle Feeding' })
+        .getByRole('button', { name: /^Log$/i })
+        .click();
       await page1
         .getByLabel(/volume|amount|ml/i)
         .or(page1.getByPlaceholder(/ml|volume|amount/i))
@@ -391,7 +397,10 @@ test.describe('Tier 4: Real-World End-to-End Scenarios', () => {
     await expectNoHorizontalOverflow(page);
 
     // Open bottle modal, enter volume via keyboard, submit, and close with Escape if needed
-    await page.getByRole('button', { name: /log bottle/i }).first().click();
+    await page
+      .getByRole('region', { name: 'Bottle Feeding' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
     const dialog = page.getByRole('dialog').first();
     await expect(dialog).toBeVisible();
 

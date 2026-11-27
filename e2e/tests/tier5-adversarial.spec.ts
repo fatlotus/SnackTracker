@@ -15,7 +15,10 @@ async function logBottleViaUI(
   volumeMl: number,
   notes?: string,
 ): Promise<void> {
-  await page.getByRole('button', { name: /log bottle/i }).first().click();
+  await page
+    .getByRole('region', { name: 'Bottle Feeding' })
+    .getByRole('button', { name: /^Log$/i })
+    .click();
   const volumeInput = page
     .getByLabel(/volume|amount|ml/i)
     .or(page.getByPlaceholder(/ml|volume|amount/i))
@@ -40,7 +43,7 @@ test.describe('Tier 5: Adversarial & Edge-Case E2E Suite', () => {
 
     await page.getByRole('button', { name: /start bottle/i }).first().click();
     await expect(
-      page.getByRole('button', { name: /finish & enter volume/i }).first(),
+      page.getByRole('button', { name: /finish & log volume/i }).first(),
     ).toBeVisible({ timeout: 5_000 });
 
     await page.getByRole('button', { name: /^Start Left$/i }).first().click();
@@ -57,7 +60,7 @@ test.describe('Tier 5: Adversarial & Edge-Case E2E Suite', () => {
     await page.reload();
 
     await expect(
-      page.getByRole('button', { name: /finish & enter volume/i }).first(),
+      page.getByRole('button', { name: /finish & log volume/i }).first(),
     ).toBeVisible({ timeout: 10_000 });
     await expect(
       page.getByRole('button', { name: /^Finish$/i }).first(),

@@ -449,8 +449,10 @@ test.describe('F2: Breastfeeding Tracking — Tier 2 Boundary & Corner Cases', (
   }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
-    // 1st Manual button on dashboard is in the Breastfeeding card
-    await page.getByRole('button', { name: /^Manual$/i }).first().click();
+    await page
+      .getByRole('region', { name: 'Breastfeeding' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
 
     const now = new Date();
     const start = new Date(now);
@@ -466,7 +468,7 @@ test.describe('F2: Breastfeeding Tracking — Tier 2 Boundary & Corner Cases', (
       .first()
       .fill('Midnight crossover feed');
 
-    await page.getByRole('button', { name: /^Save$/i }).last().click();
+    await page.getByRole('button', { name: /save breastfeed/i }).last().click();
 
     await page.getByRole('button', { name: /^Timeline$/i }).first().click();
     await expect(
@@ -489,7 +491,7 @@ test.describe('F2: Breastfeeding Tracking — Tier 2 Boundary & Corner Cases', (
 
     const notesInput = page.getByLabel(/notes/i).or(page.getByPlaceholder(/notes|latch/i));
     await notesInput.first().fill('Updated breast note');
-    await page.getByRole('button', { name: /^Save$/i }).last().click();
+    await page.getByRole('button', { name: /save breastfeed/i }).last().click();
     await expect(main.getByText(/Updated breast note/i).first()).toBeVisible();
 
     // Now delete
@@ -504,7 +506,10 @@ test.describe('F3: Bottle Feeding Tracking — Tier 2 Boundary & Corner Cases', 
   }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
-    await page.getByRole('button', { name: /log bottle/i }).first().click();
+    await page
+      .getByRole('region', { name: 'Bottle Feeding' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
 
     const now = new Date();
     const start = new Date(now);
@@ -531,7 +536,10 @@ test.describe('F3: Bottle Feeding Tracking — Tier 2 Boundary & Corner Cases', 
   test('rejects negative and non-numeric volumeMl values', async ({ page }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
-    await page.getByRole('button', { name: /log bottle/i }).first().click();
+    await page
+      .getByRole('region', { name: 'Bottle Feeding' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
     const volumeInput = page
       .getByLabel(/volume|amount|ml/i)
       .or(page.getByPlaceholder(/ml|volume/i))
@@ -547,7 +555,10 @@ test.describe('F3: Bottle Feeding Tracking — Tier 2 Boundary & Corner Cases', 
   test('accepts decimal and large volumeMl entries', async ({ page }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
-    await page.getByRole('button', { name: /log bottle/i }).first().click();
+    await page
+      .getByRole('region', { name: 'Bottle Feeding' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
     await page
       .getByLabel(/volume|amount|ml/i)
       .or(page.getByPlaceholder(/ml|volume/i))
@@ -564,7 +575,10 @@ test.describe('F3: Bottle Feeding Tracking — Tier 2 Boundary & Corner Cases', 
   test('allows null/omitted volumeMl for bottle feed', async ({ page }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
-    await page.getByRole('button', { name: /log bottle/i }).first().click();
+    await page
+      .getByRole('region', { name: 'Bottle Feeding' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
     // Leave volume empty / null
     await page
       .getByLabel(/notes/i)
@@ -589,7 +603,10 @@ test.describe('F3: Bottle Feeding Tracking — Tier 2 Boundary & Corner Cases', 
       page.getByRole('button', { name: /^Wake Up$/i }).first(),
     ).toBeVisible();
 
-    await page.getByRole('button', { name: /log bottle/i }).first().click();
+    await page
+      .getByRole('region', { name: 'Bottle Feeding' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
     await page
       .getByLabel(/volume|amount|ml/i)
       .or(page.getByPlaceholder(/ml|volume/i))
@@ -615,8 +632,10 @@ test.describe('F4: Sleep Tracking — Tier 2 Boundary & Corner Cases', () => {
   }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
-    // 2nd Manual button on dashboard is in the Sleep card
-    await page.getByRole('button', { name: /^Manual$/i }).nth(1).click();
+    await page
+      .getByRole('region', { name: 'Sleep' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
 
     const start = new Date();
     start.setHours(0, 0, 0, 0);
@@ -664,7 +683,10 @@ test.describe('F4: Sleep Tracking — Tier 2 Boundary & Corner Cases', () => {
   }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
-    await page.getByRole('button', { name: /^Manual$/i }).nth(1).click();
+    await page
+      .getByRole('region', { name: 'Sleep' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
 
     const start = new Date();
     const end = new Date(start.getTime() - 60 * 60_000);
@@ -688,7 +710,10 @@ test.describe('F4: Sleep Tracking — Tier 2 Boundary & Corner Cases', () => {
   test('handles long >12h multi-day sleep duration cleanly', async ({ page }) => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
-    await page.getByRole('button', { name: /^Manual$/i }).nth(1).click();
+    await page
+      .getByRole('region', { name: 'Sleep' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
 
     const end = new Date();
     const start = new Date(end.getTime() - 14 * 60 * 60_000);
@@ -742,8 +767,8 @@ test.describe('F5: Diaper Tracking — Tier 2 Boundary & Corner Cases', () => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
     await page
-      .getByRole('button', { name: /^Details$/i })
-      .first()
+      .getByRole('region', { name: '1-Tap Diaper Log' })
+      .getByRole('button', { name: /^Log$/i })
       .click();
 
     const rashToggle = page
@@ -815,7 +840,10 @@ test.describe('F6: Spit-Up Tracking — Tier 2 Boundary & Corner Cases', () => {
     await setupAuthenticatedBaby(page, { babyName: 'Maya' });
 
     // Log bottle feed
-    await page.getByRole('button', { name: /log bottle/i }).first().click();
+    await page
+      .getByRole('region', { name: 'Bottle Feeding' })
+      .getByRole('button', { name: /^Log$/i })
+      .click();
     await page
       .getByLabel(/volume|amount|ml/i)
       .or(page.getByPlaceholder(/ml|volume/i))
