@@ -857,7 +857,7 @@ test.describe('F10: Multi-Parent Sharing & Auth — Tier 2 Boundaries', () => {
       members: Array<{ userId: string; role: string }>;
     };
     const ownerEntry = members.find((m) => m.userId === user.id);
-    expect(ownerEntry?.role).toBe('owner');
+    expect(ownerEntry?.role).toBe('parent');
   });
 
   test('revoked user offline push is rejected on sync', async ({ browser }) => {

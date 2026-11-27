@@ -2,10 +2,12 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import { signSessionToken } from '../auth/crypto.js';
+import { SqliteStorageAdapter } from '../db/sqlite.js';
 
 function extractCookie(res: {
   headers: Record<string, string | string[] | number | undefined>;
@@ -276,7 +278,7 @@ describe('Baby Tracker Server (M2)', () => {
     expect(pullBody.babies).toHaveLength(1);
     expect(pullBody.babies[0]!.name).toBe('Maya');
     expect(pullBody.members).toHaveLength(1);
-    expect(pullBody.members[0]!.role).toBe('owner');
+    expect(pullBody.members[0]!.role).toBe('parent');
     expect(pullBody.events).toHaveLength(1);
     // Clamped to <= now + 65s
     expect(Date.parse(pullBody.events[0]!.updatedAt)).toBeLessThanOrEqual(
@@ -1072,16 +1074,23 @@ describe('Baby Tracker Server (M2)', () => {
       cgBabyDeleteId,
     ]);
 
-    // 3. Non-owners (caregiver, viewer, outsider) get 403 on POST /api/babies/:babyId/invites
-    for (const nonOwnerCookie of [cookieCaregiver, cookieViewer, cookieOutsider]) {
+    // 3. Viewers and outsiders get 403 on POST /api/babies/:babyId/invites; caregivers get 403 for parent invites
+    for (const nonInviterCookie of [cookieViewer, cookieOutsider]) {
       const invRes = await app.inject({
         method: 'POST',
         url: `/api/babies/${babyId}/invites`,
-        headers: { cookie: nonOwnerCookie },
+        headers: { cookie: nonInviterCookie },
         payload: { role: 'viewer' },
       });
       expect(invRes.statusCode).toBe(403);
     }
+    const cgParentInvRes = await app.inject({
+      method: 'POST',
+      url: `/api/babies/${babyId}/invites`,
+      headers: { cookie: cookieCaregiver },
+      payload: { role: 'parent' },
+    });
+    expect(cgParentInvRes.statusCode).toBe(403);
 
     // 4. Non-member gets 403 on GET /api/babies/:babyId/members
     const outsiderMembers = await app.inject({
@@ -1091,13 +1100,14 @@ describe('Baby Tracker Server (M2)', () => {
     });
     expect(outsiderMembers.statusCode).toBe(403);
 
-    // 5. Non-owner gets 403 on DELETE /api/babies/:babyId/members/:userId (for another user)
-    const cgDelViewer = await app.inject({
+    // 5. Hierarchy enforcement on DELETE /api/babies/:babyId/members/:userId
+    // Caregiver cannot remove parent
+    const cgDelParent = await app.inject({
       method: 'DELETE',
-      url: `/api/babies/${babyId}/members/${viewerId}`,
+      url: `/api/babies/${babyId}/members/${ownerId}`,
       headers: { cookie: cookieCaregiver },
     });
-    expect(cgDelViewer.statusCode).toBe(403);
+    expect(cgDelParent.statusCode).toBe(403);
 
     const viewerDelCaregiver = await app.inject({
       method: 'DELETE',
@@ -1541,7 +1551,7 @@ describe('Baby Tracker Server (M2)', () => {
     });
     const cgCode = (cgInvRes.json() as { invite: { code: string } }).invite.code;
 
-    // Owner accepting a viewer invite retains 'owner' role
+    // Parent accepting a viewer invite retains 'parent' role
     const ownerAcceptViewer = await app.inject({
       method: 'POST',
       url: '/api/invites/accept',
@@ -1549,7 +1559,7 @@ describe('Baby Tracker Server (M2)', () => {
       payload: { code: viewerCode },
     });
     expect(ownerAcceptViewer.statusCode).toBe(200);
-    expect((ownerAcceptViewer.json() as { member: { role: string } }).member.role).toBe('owner');
+    expect((ownerAcceptViewer.json() as { member: { role: string } }).member.role).toBe('parent');
 
     // Caregiver accepts invite, then self-removes -> 200 and subsequent sync rejected
     const cgAccept = await app.inject({
@@ -2521,7 +2531,7 @@ describe('Baby Tracker Server (M2)', () => {
     ).events;
     expect(
       pulledEvents.some((e) => e.id === pumpingId && e.type === 'pumping'),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       pulledEvents.some((e) => e.id === tummyId && e.type === 'tummy_time'),
     ).toBe(true);
@@ -2633,5 +2643,829 @@ describe('Baby Tracker Server (M2)', () => {
     expect(assetRes.headers['cache-control']).toBe(
       'public, max-age=31536000, immutable',
     );
+  });
+
+  it('enforces pumping RBAC on push (upsert/delete/type-change) and pull, and backfills pumping on promotion to parent', async () => {
+    const app = await createTestApp();
+
+    const regParent = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: {
+        email: 'pump-parent@example.com',
+        password: 'password123',
+        displayName: 'Parent',
+      },
+    });
+    const parentCookie = extractCookie(regParent);
+    const parentId = (regParent.json() as { user: { id: string } }).user.id;
+
+    const regCg = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: {
+        email: 'pump-cg@example.com',
+        password: 'password123',
+        displayName: 'Caregiver',
+      },
+    });
+    const cgCookie = extractCookie(regCg);
+    const cgId = (regCg.json() as { user: { id: string } }).user.id;
+
+    const regViewer = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: {
+        email: 'pump-viewer@example.com',
+        password: 'password123',
+        displayName: 'Viewer',
+      },
+    });
+    const viewerCookie = extractCookie(regViewer);
+
+    const babyId = crypto.randomUUID();
+    const pumpingId = crypto.randomUUID();
+    const bottleId = crypto.randomUUID();
+    const t1 = '2026-06-01T10:00:00.000Z';
+    const t2 = '2026-06-01T10:15:00.000Z';
+    const t3 = '2026-06-01T10:30:00.000Z';
+
+    // Parent creates baby + pumping event + bottle event
+    const parentPush = await app.inject({
+      method: 'POST',
+      url: '/api/sync/push',
+      headers: { cookie: parentCookie },
+      payload: {
+        mutations: [
+          {
+            mutationId: crypto.randomUUID(),
+            entityType: 'baby',
+            op: 'upsert',
+            clientUpdatedAt: t1,
+            data: {
+              id: babyId,
+              name: 'Pumping RBAC Baby',
+              dob: '2026-01-01',
+              avatarColor: '#ec4899',
+              isArchived: false,
+              createdByUserId: parentId,
+              createdAt: t1,
+              updatedAt: t1,
+              deletedAt: null,
+            },
+          },
+          {
+            mutationId: crypto.randomUUID(),
+            entityType: 'event',
+            op: 'upsert',
+            clientUpdatedAt: t2,
+            data: {
+              id: pumpingId,
+              babyId,
+              type: 'pumping',
+              startedAt: t1,
+              endedAt: t2,
+              payload: { side: 'both', volumeMl: 120 },
+              loggedByUserId: parentId,
+              updatedByUserId: parentId,
+              createdAt: t1,
+              updatedAt: t2,
+              deletedAt: null,
+            },
+          },
+          {
+            mutationId: crypto.randomUUID(),
+            entityType: 'event',
+            op: 'upsert',
+            clientUpdatedAt: t2,
+            data: {
+              id: bottleId,
+              babyId,
+              type: 'bottle_feed',
+              startedAt: t1,
+              endedAt: t2,
+              payload: { volumeMl: 90, milkType: 'breastmilk' },
+              loggedByUserId: parentId,
+              updatedByUserId: parentId,
+              createdAt: t1,
+              updatedAt: t2,
+              deletedAt: null,
+            },
+          },
+        ],
+      },
+    });
+    expect(parentPush.statusCode).toBe(200);
+    expect(parentPush.json().rejected).toEqual([]);
+
+    // Invite caregiver and viewer
+    const cgInv = await app.inject({
+      method: 'POST',
+      url: `/api/babies/${babyId}/invites`,
+      headers: { cookie: parentCookie },
+      payload: { role: 'caregiver' },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/api/invites/accept',
+      headers: { cookie: cgCookie },
+      payload: { code: (cgInv.json() as { invite: { code: string } }).invite.code },
+    });
+
+    const viewerInv = await app.inject({
+      method: 'POST',
+      url: `/api/babies/${babyId}/invites`,
+      headers: { cookie: parentCookie },
+      payload: { role: 'viewer' },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/api/invites/accept',
+      headers: { cookie: viewerCookie },
+      payload: { code: (viewerInv.json() as { invite: { code: string } }).invite.code },
+    });
+
+    // Caregiver pulls -> sees bottle_feed, does NOT see pumping
+    const cgPull = await app.inject({
+      method: 'GET',
+      url: '/api/sync/pull?since_seq=0',
+      headers: { cookie: cgCookie },
+    });
+    expect(cgPull.statusCode).toBe(200);
+    const cgPullBody = cgPull.json() as {
+      events: Array<{ id: string; type: string }>;
+      latestSeq: number;
+    };
+    expect(cgPullBody.events.some((e) => e.id === bottleId)).toBe(true);
+    expect(cgPullBody.events.some((e) => e.type === 'pumping')).toBe(false);
+
+    // Viewer pulls -> sees bottle_feed, does NOT see pumping
+    const viewerPull = await app.inject({
+      method: 'GET',
+      url: '/api/sync/pull?since_seq=0',
+      headers: { cookie: viewerCookie },
+    });
+    expect(viewerPull.statusCode).toBe(200);
+    const viewerEvents = (viewerPull.json() as { events: Array<{ id: string; type: string }> }).events;
+    expect(viewerEvents.some((e) => e.id === bottleId)).toBe(true);
+    expect(viewerEvents.some((e) => e.type === 'pumping')).toBe(false);
+
+    // Caregiver attempts: (1) create pumping, (2) edit existing pumping (type-change to bottle),
+    // (3) type-change existing bottle to pumping, (4) delete existing pumping, (5) tombstone pumping
+    const mCreatePump = crypto.randomUUID();
+    const mEditPumpToBottle = crypto.randomUUID();
+    const mEditBottleToPump = crypto.randomUUID();
+    const mDelPump = crypto.randomUUID();
+    const mTombstonePump = crypto.randomUUID();
+
+    const cgBadPush = await app.inject({
+      method: 'POST',
+      url: '/api/sync/push',
+      headers: { cookie: cgCookie },
+      payload: {
+        mutations: [
+          {
+            mutationId: mCreatePump,
+            entityType: 'event',
+            op: 'upsert',
+            clientUpdatedAt: t3,
+            data: {
+              id: crypto.randomUUID(),
+              babyId,
+              type: 'pumping',
+              startedAt: t2,
+              endedAt: t3,
+              payload: { side: 'left', volumeMl: 60 },
+              loggedByUserId: cgId,
+              updatedByUserId: cgId,
+              createdAt: t2,
+              updatedAt: t3,
+              deletedAt: null,
+            },
+          },
+          {
+            mutationId: mEditPumpToBottle,
+            entityType: 'event',
+            op: 'upsert',
+            clientUpdatedAt: t3,
+            data: {
+              id: pumpingId,
+              babyId,
+              type: 'bottle_feed',
+              startedAt: t1,
+              endedAt: t2,
+              payload: { volumeMl: 120 },
+              loggedByUserId: cgId,
+              updatedByUserId: cgId,
+              createdAt: t1,
+              updatedAt: t3,
+              deletedAt: null,
+            },
+          },
+          {
+            mutationId: mEditBottleToPump,
+            entityType: 'event',
+            op: 'upsert',
+            clientUpdatedAt: t3,
+            data: {
+              id: bottleId,
+              babyId,
+              type: 'pumping',
+              startedAt: t1,
+              endedAt: t2,
+              payload: { volumeMl: 90 },
+              loggedByUserId: cgId,
+              updatedByUserId: cgId,
+              createdAt: t1,
+              updatedAt: t3,
+              deletedAt: null,
+            },
+          },
+          {
+            mutationId: mDelPump,
+            entityType: 'event',
+            op: 'delete',
+            clientUpdatedAt: t3,
+            data: { id: pumpingId, deletedAt: t3 },
+          },
+          {
+            mutationId: mTombstonePump,
+            entityType: 'event',
+            op: 'delete',
+            clientUpdatedAt: t3,
+            data: {
+              id: crypto.randomUUID(),
+              babyId,
+              type: 'pumping',
+              startedAt: t2,
+              endedAt: t3,
+              payload: { volumeMl: 30 },
+              loggedByUserId: cgId,
+              updatedByUserId: cgId,
+              createdAt: t2,
+              updatedAt: t3,
+              deletedAt: t3,
+            },
+          },
+        ],
+      },
+    });
+    expect(cgBadPush.statusCode).toBe(200);
+    const cgBadPushBody = cgBadPush.json() as {
+      ackedMutationIds: string[];
+      rejected: Array<{ mutationId: string; reason: string }>;
+    };
+    expect(cgBadPushBody.ackedMutationIds).toEqual([]);
+    expect(cgBadPushBody.rejected).toHaveLength(5);
+    for (const r of cgBadPushBody.rejected) {
+      expect(r.reason).toMatch(/parent role required/i);
+    }
+
+    // Parent promotes caregiver to parent -> bumping server_seq triggers backfill on next pull!
+    const promoteRes = await app.inject({
+      method: 'PATCH',
+      url: `/api/babies/${babyId}/members/${cgId}`,
+      headers: { cookie: parentCookie },
+      payload: { role: 'parent' },
+    });
+    expect(promoteRes.statusCode).toBe(200);
+    expect(
+      (promoteRes.json() as { member: { role: string } }).member.role,
+    ).toBe('parent');
+
+    // Promoted user pulls since seq before promotion -> backfills existing pumping event!
+    const cgPullAfterPromo = await app.inject({
+      method: 'GET',
+      url: `/api/sync/pull?since_seq=${cgPullBody.latestSeq}`,
+      headers: { cookie: cgCookie },
+    });
+    expect(cgPullAfterPromo.statusCode).toBe(200);
+    const promoEvents = (
+      cgPullAfterPromo.json() as { events: Array<{ id: string; type: string }> }
+    ).events;
+    expect(
+      promoEvents.some((e) => e.id === pumpingId && e.type === 'pumping'),
+    ).toBe(true);
+
+    // Promoted parent can now create and delete pumping events
+    const newPumpId = crypto.randomUUID();
+    const promoPush = await app.inject({
+      method: 'POST',
+      url: '/api/sync/push',
+      headers: { cookie: cgCookie },
+      payload: {
+        mutations: [
+          {
+            mutationId: crypto.randomUUID(),
+            entityType: 'event',
+            op: 'upsert',
+            clientUpdatedAt: t3,
+            data: {
+              id: newPumpId,
+              babyId,
+              type: 'pumping',
+              startedAt: t2,
+              endedAt: t3,
+              payload: { side: 'right', volumeMl: 80 },
+              loggedByUserId: cgId,
+              updatedByUserId: cgId,
+              createdAt: t2,
+              updatedAt: t3,
+              deletedAt: null,
+            },
+          },
+          {
+            mutationId: crypto.randomUUID(),
+            entityType: 'event',
+            op: 'delete',
+            clientUpdatedAt: t3,
+            data: { id: pumpingId, deletedAt: t3 },
+          },
+        ],
+      },
+    });
+    expect(promoPush.statusCode).toBe(200);
+    expect(promoPush.json().rejected).toEqual([]);
+    expect(promoPush.json().ackedMutationIds).toHaveLength(2);
+  });
+
+  it('enforces member role PATCH ceiling, LAST_PARENT 409, invite ceiling, and DELETE hierarchy', async () => {
+    const app = await createTestApp();
+
+    const register = async (email: string, displayName: string) => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/auth/register',
+        payload: { email, password: 'password123', displayName },
+      });
+      expect(res.statusCode).toBe(201);
+      return {
+        cookie: extractCookie(res),
+        id: (res.json() as { user: { id: string } }).user.id,
+      };
+    };
+
+    const parent1 = await register('role-p1@example.com', 'Parent 1');
+    const cg1 = await register('role-cg1@example.com', 'Caregiver 1');
+    const cg2 = await register('role-cg2@example.com', 'Caregiver 2');
+    const viewer1 = await register('role-v1@example.com', 'Viewer 1');
+
+    const babyId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await app.inject({
+      method: 'POST',
+      url: '/api/sync/push',
+      headers: { cookie: parent1.cookie },
+      payload: {
+        mutations: [
+          {
+            mutationId: crypto.randomUUID(),
+            entityType: 'baby',
+            op: 'upsert',
+            clientUpdatedAt: now,
+            data: {
+              id: babyId,
+              name: 'Hierarchy Baby',
+              dob: '2026-02-01',
+              avatarColor: '#6366f1',
+              isArchived: false,
+              createdByUserId: parent1.id,
+              createdAt: now,
+              updatedAt: now,
+              deletedAt: null,
+            },
+          },
+        ],
+      },
+    });
+
+    // Parent creates caregiver & viewer invites
+    const invCg = await app.inject({
+      method: 'POST',
+      url: `/api/babies/${babyId}/invites`,
+      headers: { cookie: parent1.cookie },
+      payload: { role: 'caregiver' },
+    });
+    expect(invCg.statusCode).toBe(201);
+    const cgCode = (invCg.json() as { invite: { code: string } }).invite.code;
+    await app.inject({
+      method: 'POST',
+      url: '/api/invites/accept',
+      headers: { cookie: cg1.cookie },
+      payload: { code: cgCode },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/api/invites/accept',
+      headers: { cookie: cg2.cookie },
+      payload: { code: cgCode },
+    });
+
+    const invViewer = await app.inject({
+      method: 'POST',
+      url: `/api/babies/${babyId}/invites`,
+      headers: { cookie: parent1.cookie },
+      payload: { role: 'viewer' },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/api/invites/accept',
+      headers: { cookie: viewer1.cookie },
+      payload: { code: (invViewer.json() as { invite: { code: string } }).invite.code },
+    });
+
+    // Invite ceiling: caregiver CAN invite caregiver & viewer, CANNOT invite parent
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/api/babies/${babyId}/invites`,
+          headers: { cookie: cg1.cookie },
+          payload: { role: 'caregiver' },
+        })
+      ).statusCode,
+    ).toBe(201);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/api/babies/${babyId}/invites`,
+          headers: { cookie: cg1.cookie },
+          payload: { role: 'viewer' },
+        })
+      ).statusCode,
+    ).toBe(201);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/api/babies/${babyId}/invites`,
+          headers: { cookie: cg1.cookie },
+          payload: { role: 'parent' },
+        })
+      ).statusCode,
+    ).toBe(403);
+
+    // Parent CAN invite parent
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/api/babies/${babyId}/invites`,
+          headers: { cookie: parent1.cookie },
+          payload: { role: 'parent' },
+        })
+      ).statusCode,
+    ).toBe(201);
+
+    // Viewer CANNOT invite anyone
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/api/babies/${babyId}/invites`,
+          headers: { cookie: viewer1.cookie },
+          payload: { role: 'viewer' },
+        })
+      ).statusCode,
+    ).toBe(403);
+
+    // GET /members shows actual roles to all active members (including viewer)
+    const viewerMembersRes = await app.inject({
+      method: 'GET',
+      url: `/api/babies/${babyId}/members`,
+      headers: { cookie: viewer1.cookie },
+    });
+    expect(viewerMembersRes.statusCode).toBe(200);
+    const viewerMembers = (
+      viewerMembersRes.json() as { members: Array<{ userId: string; role: string }> }
+    ).members;
+    expect(viewerMembers.find((m) => m.userId === parent1.id)?.role).toBe('parent');
+
+    // Validation & auth errors on PATCH
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/babies/${babyId}/members/${cg1.id}`,
+          payload: { role: 'viewer' },
+        })
+      ).statusCode,
+    ).toBe(401);
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/babies/${babyId}/members/${cg1.id}`,
+          headers: { cookie: parent1.cookie },
+          payload: { role: 'owner' },
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/babies/not-a-uuid/members/${cg1.id}`,
+          headers: { cookie: parent1.cookie },
+          payload: { role: 'viewer' },
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/babies/${babyId}/members/${crypto.randomUUID()}`,
+          headers: { cookie: parent1.cookie },
+          payload: { role: 'viewer' },
+        })
+      ).statusCode,
+    ).toBe(404);
+
+    // Viewer gets 403 on PATCH (even on self)
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/babies/${babyId}/members/${viewer1.id}`,
+          headers: { cookie: viewer1.cookie },
+          payload: { role: 'viewer' },
+        })
+      ).statusCode,
+    ).toBe(403);
+
+    // Caregiver CANNOT promote self or others to parent, CANNOT modify parent
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/babies/${babyId}/members/${cg1.id}`,
+          headers: { cookie: cg1.cookie },
+          payload: { role: 'parent' },
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/babies/${babyId}/members/${cg2.id}`,
+          headers: { cookie: cg1.cookie },
+          payload: { role: 'parent' },
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/babies/${babyId}/members/${parent1.id}`,
+          headers: { cookie: cg1.cookie },
+          payload: { role: 'caregiver' },
+        })
+      ).statusCode,
+    ).toBe(403);
+
+    // Caregiver CAN demote cg2 to viewer and promote viewer1 to caregiver
+    const cgDemoteCg2 = await app.inject({
+      method: 'PATCH',
+      url: `/api/babies/${babyId}/members/${cg2.id}`,
+      headers: { cookie: cg1.cookie },
+      payload: { role: 'viewer' },
+    });
+    expect(cgDemoteCg2.statusCode).toBe(200);
+    expect(
+      (cgDemoteCg2.json() as { member: { role: string } }).member.role,
+    ).toBe('viewer');
+
+    const cgPromoteV1 = await app.inject({
+      method: 'PATCH',
+      url: `/api/babies/${babyId}/members/${viewer1.id}`,
+      headers: { cookie: cg1.cookie },
+      payload: { role: 'caregiver' },
+    });
+    expect(cgPromoteV1.statusCode).toBe(200);
+    expect(
+      (cgPromoteV1.json() as { member: { role: string } }).member.role,
+    ).toBe('caregiver');
+
+    // Caregiver CAN remove cg2 (now viewer), CANNOT remove parent1
+    expect(
+      (
+        await app.inject({
+          method: 'DELETE',
+          url: `/api/babies/${babyId}/members/${parent1.id}`,
+          headers: { cookie: cg1.cookie },
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: 'DELETE',
+          url: `/api/babies/${babyId}/members/${cg2.id}`,
+          headers: { cookie: cg1.cookie },
+        })
+      ).statusCode,
+    ).toBe(200);
+
+    // Last active parent CANNOT self-demote or self-remove -> 409 LAST_PARENT
+    const selfDemoteLast = await app.inject({
+      method: 'PATCH',
+      url: `/api/babies/${babyId}/members/${parent1.id}`,
+      headers: { cookie: parent1.cookie },
+      payload: { role: 'caregiver' },
+    });
+    expect(selfDemoteLast.statusCode).toBe(409);
+    expect((selfDemoteLast.json() as { code: string }).code).toBe('LAST_PARENT');
+
+    const selfRemoveLast = await app.inject({
+      method: 'DELETE',
+      url: `/api/babies/${babyId}/members/${parent1.id}`,
+      headers: { cookie: parent1.cookie },
+    });
+    expect(selfRemoveLast.statusCode).toBe(409);
+    expect((selfRemoveLast.json() as { code: string }).code).toBe('LAST_PARENT');
+
+    // Once parent1 promotes cg1 to parent, parent1 CAN demote self to caregiver
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/babies/${babyId}/members/${cg1.id}`,
+          headers: { cookie: parent1.cookie },
+          payload: { role: 'parent' },
+        })
+      ).statusCode,
+    ).toBe(200);
+
+    const selfDemoteNowOk = await app.inject({
+      method: 'PATCH',
+      url: `/api/babies/${babyId}/members/${parent1.id}`,
+      headers: { cookie: parent1.cookie },
+      payload: { role: 'caregiver' },
+    });
+    expect(selfDemoteNowOk.statusCode).toBe(200);
+    expect(
+      (selfDemoteNowOk.json() as { member: { role: string } }).member.role,
+    ).toBe('caregiver');
+  });
+
+  it('migrates legacy SQLite DB constraints and converts owner->parent while preserving caregiver/viewer', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-legacy-sqlite-'));
+    tempDirs.push(tmpDir);
+    const dbPath = path.join(tmpDir, 'legacy.sqlite');
+
+    const uOwner = crypto.randomUUID();
+    const uCg = crypto.randomUUID();
+    const uViewer = crypto.randomUUID();
+    const babyId = crypto.randomUUID();
+    const ts = '2026-01-01T00:00:00.000Z';
+
+    // Seed a database with the OLD schema (owner/caregiver/viewer on baby_members, caregiver/viewer on baby_invites)
+    const legacyDb = new DatabaseSync(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE babies (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        dob TEXT NOT NULL,
+        birth_weight_grams INTEGER,
+        avatar_color TEXT NOT NULL,
+        notes TEXT,
+        is_archived INTEGER NOT NULL DEFAULT 0,
+        created_by_user_id TEXT NOT NULL REFERENCES users(id),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT,
+        server_seq INTEGER NOT NULL
+      );
+      CREATE TABLE baby_members (
+        id TEXT PRIMARY KEY,
+        baby_id TEXT NOT NULL REFERENCES babies(id),
+        user_id TEXT NOT NULL REFERENCES users(id),
+        display_name TEXT,
+        role TEXT NOT NULL CHECK (role IN ('owner', 'caregiver', 'viewer')),
+        joined_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT,
+        server_seq INTEGER NOT NULL,
+        UNIQUE(baby_id, user_id)
+      );
+      CREATE TABLE baby_invites (
+        id TEXT PRIMARY KEY,
+        baby_id TEXT NOT NULL REFERENCES babies(id),
+        code TEXT NOT NULL UNIQUE,
+        role TEXT NOT NULL CHECK (role IN ('caregiver', 'viewer')),
+        created_by_user_id TEXT NOT NULL REFERENCES users(id),
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE sync_seq (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        val INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT INTO sync_seq (id, val) VALUES (1, 10);
+    `);
+    legacyDb
+      .prepare(
+        'INSERT INTO users (id, email, display_name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run(uOwner, 'owner@legacy.test', 'Legacy Owner', 'hash', ts);
+    legacyDb
+      .prepare(
+        'INSERT INTO users (id, email, display_name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run(uCg, 'cg@legacy.test', 'Legacy CG', 'hash', ts);
+    legacyDb
+      .prepare(
+        'INSERT INTO users (id, email, display_name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run(uViewer, 'viewer@legacy.test', 'Legacy Viewer', 'hash', ts);
+    legacyDb
+      .prepare(
+        `INSERT INTO babies (id, name, dob, avatar_color, is_archived, created_by_user_id, created_at, updated_at, server_seq)
+         VALUES (?, 'Legacy Baby', '2026-01-01', '#6366f1', 0, ?, ?, ?, 1)`,
+      )
+      .run(babyId, uOwner, ts, ts);
+    legacyDb
+      .prepare(
+        `INSERT INTO baby_members (id, baby_id, user_id, display_name, role, joined_at, updated_at, deleted_at, server_seq)
+         VALUES (?, ?, ?, 'Legacy Owner', 'owner', ?, ?, NULL, 2)`,
+      )
+      .run(crypto.randomUUID(), babyId, uOwner, ts, ts);
+    legacyDb
+      .prepare(
+        `INSERT INTO baby_members (id, baby_id, user_id, display_name, role, joined_at, updated_at, deleted_at, server_seq)
+         VALUES (?, ?, ?, 'Legacy CG', 'caregiver', ?, ?, NULL, 3)`,
+      )
+      .run(crypto.randomUUID(), babyId, uCg, ts, ts);
+    legacyDb
+      .prepare(
+        `INSERT INTO baby_members (id, baby_id, user_id, display_name, role, joined_at, updated_at, deleted_at, server_seq)
+         VALUES (?, ?, ?, 'Legacy Viewer', 'viewer', ?, ?, NULL, 4)`,
+      )
+      .run(crypto.randomUUID(), babyId, uViewer, ts, ts);
+    legacyDb.close();
+
+    // Open with SqliteStorageAdapter -> runs idempotent migration
+    const adapter = new SqliteStorageAdapter(dbPath);
+    await adapter.init();
+    try {
+      const members = await adapter.listBabyMembers(babyId);
+      const ownerM = members.find((m) => m.userId === uOwner)!;
+      const cgM = members.find((m) => m.userId === uCg)!;
+      const viewerM = members.find((m) => m.userId === uViewer)!;
+
+      expect(ownerM.role).toBe('parent');
+      expect(ownerM.serverSeq).toBeGreaterThan(10);
+      expect(cgM.role).toBe('caregiver');
+      expect(cgM.serverSeq).toBe(3);
+      expect(viewerM.role).toBe('viewer');
+      expect(viewerM.serverSeq).toBe(4);
+
+      // New baby_invites CHECK constraint allows 'parent'
+      const parentInvite = await adapter.createInvite({
+        id: crypto.randomUUID(),
+        babyId,
+        code: 'PARENT01',
+        role: 'parent',
+        createdByUserId: uOwner,
+        expiresAt: '2099-01-01T00:00:00.000Z',
+        createdAt: ts,
+      });
+      expect(parentInvite.role).toBe('parent');
+
+      // Backfill promotion helper promotes caregiver to parent and bumps seq
+      const promoted = await adapter.promoteUserMembershipsToParent({
+        userId: uCg,
+        now: '2026-06-01T00:00:00.000Z',
+      });
+      expect(promoted).toBe(1);
+      const cgAfter = await adapter.getActiveMembership(babyId, uCg);
+      expect(cgAfter?.role).toBe('parent');
+      expect(cgAfter!.serverSeq).toBeGreaterThan(ownerM.serverSeq!);
+    } finally {
+      await adapter.close();
+    }
+
+    // Re-opening a second time is idempotent
+    const adapter2 = new SqliteStorageAdapter(dbPath);
+    await adapter2.init();
+    try {
+      const members2 = await adapter2.listBabyMembers(babyId);
+      expect(members2.find((m) => m.userId === uOwner)?.role).toBe('parent');
+      expect(members2.find((m) => m.userId === uCg)?.role).toBe('parent');
+      expect(members2.find((m) => m.userId === uViewer)?.role).toBe('viewer');
+    } finally {
+      await adapter2.close();
+    }
   });
 });
