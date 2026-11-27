@@ -6,6 +6,7 @@ import {
   exportDailyStatsToCsv,
   exportEventsToCsv,
   generatePediatricianSummary,
+  parseBabyDataJson,
 } from '../export.js';
 import { computeDateRangeStats } from '../stats.js';
 
@@ -441,5 +442,145 @@ describe('JSON & pediatrician summary exporters', () => {
     expect(md).toContain('Pumping: 2 sessions (130 ml total, 130 ml/day avg; 0h 35m total)');
     expect(md).toContain('Tummy Time: 0h 6m total (0h 6m/day avg; 1 sessions)');
     expect(md).toContain('Pumping 2 (130 ml), Tummy Time 0h 6m (1)');
+  });
+
+  it('omits pumping rows, columns, and summary text when includePumping is false', () => {
+    const pumping: TrackingEvent = {
+      id: '00000000-0000-4000-8000-000000000030',
+      babyId: BABY_ID,
+      type: 'pumping',
+      startedAt: '2026-06-01T14:00:00.000Z',
+      endedAt: '2026-06-01T14:20:00.000Z',
+      notes: 'Secret pumping note',
+      loggedByUserId: USER_ID,
+      loggedByName: 'Alex',
+      updatedByUserId: USER_ID,
+      createdAt: '2026-06-01T14:00:00.000Z',
+      updatedAt: '2026-06-01T14:20:00.000Z',
+      deletedAt: null,
+      serverSeq: 30,
+      payload: { side: 'both', volumeMl: 120, leftVolumeMl: 60, rightVolumeMl: 60 },
+    };
+    const allEvents = [...events, pumping];
+
+    const eventsCsv = exportEventsToCsv(allEvents, {
+      timeZone: 'America/New_York',
+      includePumping: false,
+    });
+    const eventsHeader = eventsCsv.split('\r\n')[0]!;
+    expect(eventsHeader).not.toContain('pumpingSide');
+    expect(eventsHeader).not.toContain('pumpingLeftMl');
+    expect(eventsHeader).not.toContain('pumpingRightMl');
+    expect(eventsCsv).not.toContain(',pumping,');
+    expect(eventsCsv).not.toContain('Secret pumping note');
+
+    const dailyStats = computeDateRangeStats(
+      allEvents,
+      '2026-06-01',
+      '2026-06-01',
+      'America/New_York',
+    );
+    const dailyCsv = exportDailyStatsToCsv(dailyStats, {
+      includePumping: false,
+    });
+    const dailyHeader = dailyCsv.split('\r\n')[0]!;
+    expect(dailyHeader).not.toContain('pumpingSessions');
+    expect(dailyHeader).not.toContain('pumpingMinutes');
+    expect(dailyHeader).not.toContain('pumpingTotalMl');
+
+    const jsonExport = exportBabyDataToJson({
+      baby,
+      events: allEvents,
+      startDateKey: '2026-06-01',
+      endDateKey: '2026-06-01',
+      timeZone: 'America/New_York',
+      includePumping: false,
+    });
+    expect(jsonExport.events.some((e) => e.type === 'pumping')).toBe(false);
+    expect(/pump/i.test(JSON.stringify(jsonExport))).toBe(false);
+    expect('pumpingCount' in jsonExport.summary.totals).toBe(false);
+    expect('pumpingTotalSeconds' in jsonExport.summary.totals).toBe(false);
+    expect('pumpingTotalMl' in jsonExport.summary.totals).toBe(false);
+    expect('pumpingCount' in jsonExport.summary.averagesPerDay).toBe(false);
+    expect('pumpingCount' in jsonExport.dailyStats[0]!).toBe(false);
+
+    const summary = generatePediatricianSummary({
+      baby,
+      events: allEvents,
+      startDateKey: '2026-06-01',
+      endDateKey: '2026-06-01',
+      timeZone: 'America/New_York',
+      includePumping: false,
+    });
+    expect(summary).not.toContain('Pumping');
+    expect(summary).not.toContain('Secret pumping note');
+  });
+});
+
+describe('parseBabyDataJson', () => {
+  it('round-trips a valid exportBabyDataToJson payload', () => {
+    const exported = exportBabyDataToJson({
+      baby,
+      events,
+      startDateKey: '2026-06-01',
+      endDateKey: '2026-06-01',
+      timeZone: 'America/New_York',
+    });
+    const parsed = parseBabyDataJson(JSON.stringify(exported));
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.data.schemaVersion).toBe(1);
+      expect(parsed.data.baby.id).toBe(BABY_ID);
+      expect(parsed.data.events).toHaveLength(4);
+      expect('summary' in parsed.data).toBe(false);
+      expect('dailyStats' in parsed.data).toBe(false);
+    }
+  });
+
+  it('rejects invalid JSON syntax', () => {
+    const parsed = parseBabyDataJson('{not-valid-json');
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.error).toBe('invalid_json');
+    }
+  });
+
+  it('rejects unsupported schemaVersion', () => {
+    const exported = exportBabyDataToJson({
+      baby,
+      events,
+      startDateKey: '2026-06-01',
+      endDateKey: '2026-06-01',
+      timeZone: 'America/New_York',
+    });
+    const parsed = parseBabyDataJson(
+      JSON.stringify({ ...exported, schemaVersion: 2 }),
+    );
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.error).toBe('unsupported_version');
+    }
+  });
+
+  it('rejects invalid events such as endedAt < startedAt', () => {
+    const exported = exportBabyDataToJson({
+      baby,
+      events,
+      startDateKey: '2026-06-01',
+      endDateKey: '2026-06-01',
+      timeZone: 'America/New_York',
+    });
+    const badEvent = {
+      ...exported.events[0]!,
+      startedAt: '2026-06-01T15:00:00.000Z',
+      endedAt: '2026-06-01T14:00:00.000Z',
+    };
+    const parsed = parseBabyDataJson(
+      JSON.stringify({ ...exported, events: [badEvent] }),
+    );
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.error).toBe('validation_failed');
+    }
   });
 });

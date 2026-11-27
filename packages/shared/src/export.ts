@@ -1,4 +1,12 @@
-import type { Baby, TrackingEvent } from './schemas.js';
+import { z } from 'zod';
+import {
+  BabySchema,
+  isoDateSchema,
+  isoDateTimeSchema,
+  TrackingEventSchema,
+  type Baby,
+  type TrackingEvent,
+} from './schemas.js';
 import {
   computeDateRangeStats,
   computePeriodAverages,
@@ -6,6 +14,7 @@ import {
   toLocalDateKey,
   type DailyStats,
   type PeriodAverages,
+  type PeriodMetrics,
 } from './stats.js';
 
 // ============================================================================
@@ -49,6 +58,7 @@ export interface ExportEventsCsvOptions {
   timeZone: string;
   includeHeader?: boolean;
   nowMs?: number;
+  includePumping?: boolean;
 }
 
 const EVENTS_CSV_HEADERS = [
@@ -79,6 +89,31 @@ const EVENTS_CSV_HEADERS = [
   'loggedBy',
 ] as const;
 
+const EVENTS_CSV_HEADERS_NO_PUMPING = [
+  'id',
+  'type',
+  'localDate',
+  'startedAtLocal',
+  'endedAtLocal',
+  'durationMinutes',
+  'breastLeftMinutes',
+  'breastRightMinutes',
+  'volumeMl',
+  'milkType',
+  'sleepCategory',
+  'sleepLocation',
+  'diaperKind',
+  'diaperAmount',
+  'stoolColor',
+  'stoolConsistency',
+  'hasRash',
+  'spitUpSeverity',
+  'relatedFeedId',
+  'tummyTimeMood',
+  'notes',
+  'loggedBy',
+] as const;
+
 function roundMinutes(seconds: number): string {
   return (seconds / 60).toFixed(1);
 }
@@ -92,16 +127,25 @@ export function exportEventsToCsv(
   events: readonly TrackingEvent[],
   options: ExportEventsCsvOptions,
 ): string {
-  const { timeZone, includeHeader = true, nowMs = Date.now() } = options;
+  const {
+    timeZone,
+    includeHeader = true,
+    nowMs = Date.now(),
+    includePumping = true,
+  } = options;
 
   const activeSorted = events
-    .filter((e) => e.deletedAt == null)
+    .filter((e) => e.deletedAt == null && (includePumping || e.type !== 'pumping'))
     .slice()
     .sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
 
   const lines: string[] = [];
   if (includeHeader) {
-    lines.push(formatCsvRow(EVENTS_CSV_HEADERS));
+    lines.push(
+      formatCsvRow(
+        includePumping ? EVENTS_CSV_HEADERS : EVENTS_CSV_HEADERS_NO_PUMPING,
+      ),
+    );
   }
 
   for (const event of activeSorted) {
@@ -184,35 +228,37 @@ export function exportEventsToCsv(
         break;
     }
 
-    lines.push(
-      formatCsvRow([
-        event.id,
-        event.type,
-        localDate,
-        startedAtLocal,
-        endedAtLocal,
-        durationMinutes,
-        breastLeftMinutes,
-        breastRightMinutes,
-        volumeMl,
-        milkType,
-        sleepCategory,
-        sleepLocation,
-        diaperKind,
-        diaperAmount,
-        stoolColor,
-        stoolConsistency,
-        hasRash,
-        spitUpSeverity,
-        relatedFeedId,
-        pumpingSide,
-        pumpingLeftMl,
-        pumpingRightMl,
-        tummyTimeMood,
-        event.notes ?? '',
-        event.loggedByName ?? event.loggedByUserId,
-      ]),
+    const rowCells: (string | number | boolean | null | undefined)[] = [
+      event.id,
+      event.type,
+      localDate,
+      startedAtLocal,
+      endedAtLocal,
+      durationMinutes,
+      breastLeftMinutes,
+      breastRightMinutes,
+      volumeMl,
+      milkType,
+      sleepCategory,
+      sleepLocation,
+      diaperKind,
+      diaperAmount,
+      stoolColor,
+      stoolConsistency,
+      hasRash,
+      spitUpSeverity,
+      relatedFeedId,
+    ];
+    if (includePumping) {
+      rowCells.push(pumpingSide, pumpingLeftMl, pumpingRightMl);
+    }
+    rowCells.push(
+      tummyTimeMood,
+      event.notes ?? '',
+      event.loggedByName ?? event.loggedByUserId,
     );
+
+    lines.push(formatCsvRow(rowCells));
   }
 
   return lines.join('\r\n');
@@ -243,42 +289,85 @@ const DAILY_STATS_CSV_HEADERS = [
   'tummyTimeMinutes',
 ] as const;
 
+const DAILY_STATS_CSV_HEADERS_NO_PUMPING = [
+  'date',
+  'totalSleepMinutes',
+  'napSleepMinutes',
+  'nightSleepMinutes',
+  'sleepSessions',
+  'breastFeedCount',
+  'breastLeftMinutes',
+  'breastRightMinutes',
+  'bottleFeedCount',
+  'bottleTotalMl',
+  'wetDiapers',
+  'poopyDiapers',
+  'bothDiapers',
+  'diaperEvents',
+  'rashCount',
+  'spitUpCount',
+  'vitaminGiven',
+  'tummyTimeSessions',
+  'tummyTimeMinutes',
+] as const;
+
+export interface ExportDailyStatsCsvOptions {
+  includeHeader?: boolean;
+  includePumping?: boolean;
+}
+
 export function exportDailyStatsToCsv(
   dailyStats: readonly DailyStats[],
-  includeHeader = true,
+  options: boolean | ExportDailyStatsCsvOptions = true,
 ): string {
+  const includeHeader =
+    typeof options === 'boolean' ? options : (options.includeHeader ?? true);
+  const includePumping =
+    typeof options === 'boolean' ? true : (options.includePumping ?? true);
+
   const lines: string[] = [];
   if (includeHeader) {
-    lines.push(formatCsvRow(DAILY_STATS_CSV_HEADERS));
+    lines.push(
+      formatCsvRow(
+        includePumping
+          ? DAILY_STATS_CSV_HEADERS
+          : DAILY_STATS_CSV_HEADERS_NO_PUMPING,
+      ),
+    );
   }
 
   for (const day of dailyStats) {
-    lines.push(
-      formatCsvRow([
-        day.dateKey,
-        roundMinutes(day.totalSleepSeconds),
-        roundMinutes(day.napSleepSeconds),
-        roundMinutes(day.nightSleepSeconds),
-        day.sleepSessionCount,
-        day.breastFeedCount,
-        roundMinutes(day.breastLeftSeconds),
-        roundMinutes(day.breastRightSeconds),
-        day.bottleFeedCount,
-        day.bottleTotalMl,
-        day.wetCount,
-        day.poopyCount,
-        day.bothCount,
-        day.diaperEventCount,
-        day.rashCount,
-        day.spitUpCount,
-        day.vitaminGiven,
+    const rowCells: (string | number | boolean | null | undefined)[] = [
+      day.dateKey,
+      roundMinutes(day.totalSleepSeconds),
+      roundMinutes(day.napSleepSeconds),
+      roundMinutes(day.nightSleepSeconds),
+      day.sleepSessionCount,
+      day.breastFeedCount,
+      roundMinutes(day.breastLeftSeconds),
+      roundMinutes(day.breastRightSeconds),
+      day.bottleFeedCount,
+      day.bottleTotalMl,
+      day.wetCount,
+      day.poopyCount,
+      day.bothCount,
+      day.diaperEventCount,
+      day.rashCount,
+      day.spitUpCount,
+      day.vitaminGiven,
+    ];
+    if (includePumping) {
+      rowCells.push(
         day.pumpingCount,
         roundMinutes(day.pumpingTotalSeconds),
         day.pumpingTotalMl,
-        day.tummyTimeCount,
-        roundMinutes(day.tummyTimeTotalSeconds),
-      ]),
+      );
+    }
+    rowCells.push(
+      day.tummyTimeCount,
+      roundMinutes(day.tummyTimeTotalSeconds),
     );
+    lines.push(formatCsvRow(rowCells));
   }
 
   return lines.join('\r\n');
@@ -287,6 +376,35 @@ export function exportDailyStatsToCsv(
 // ============================================================================
 // Versioned JSON Backup Export
 // ============================================================================
+
+type PumpingStatKeys =
+  | 'pumpingCount'
+  | 'pumpingTotalSeconds'
+  | 'pumpingTotalMl';
+
+export type ExportDailyStats =
+  | DailyStats
+  | Omit<DailyStats, PumpingStatKeys>;
+
+export type ExportPeriodAverages =
+  | PeriodAverages
+  | {
+      days: number;
+      totals: Omit<PeriodMetrics, PumpingStatKeys>;
+      averagesPerDay: Omit<PeriodMetrics, PumpingStatKeys>;
+    };
+
+function stripPumpingKeys<T extends Record<PumpingStatKeys, unknown>>(
+  obj: T,
+): Omit<T, PumpingStatKeys> {
+  const {
+    pumpingCount: _pumpingCount,
+    pumpingTotalSeconds: _pumpingTotalSeconds,
+    pumpingTotalMl: _pumpingTotalMl,
+    ...rest
+  } = obj;
+  return rest;
+}
 
 export interface BabyDataJsonExport {
   schemaVersion: 1;
@@ -297,8 +415,8 @@ export interface BabyDataJsonExport {
     endDateKey: string;
   };
   baby: Baby;
-  summary: PeriodAverages;
-  dailyStats: DailyStats[];
+  summary: ExportPeriodAverages;
+  dailyStats: ExportDailyStats[];
   events: TrackingEvent[];
 }
 
@@ -310,6 +428,7 @@ export interface ExportBabyDataOptions {
   timeZone: string;
   exportedAt?: string;
   nowMs?: number;
+  includePumping?: boolean;
 }
 
 export function exportBabyDataToJson(
@@ -323,9 +442,14 @@ export function exportBabyDataToJson(
     timeZone,
     nowMs = Date.now(),
     exportedAt = new Date(nowMs).toISOString(),
+    includePumping = true,
   } = options;
 
-  const activeEvents = events
+  const filteredEvents = includePumping
+    ? events
+    : events.filter((e) => e.type !== 'pumping');
+
+  const activeEvents = filteredEvents
     .filter((e) => {
       if (e.deletedAt != null) return false;
       const dayKey = toLocalDateKey(e.startedAt, timeZone);
@@ -334,14 +458,26 @@ export function exportBabyDataToJson(
     .slice()
     .sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
 
-  const dailyStats = computeDateRangeStats(
-    events,
+  const rawDailyStats = computeDateRangeStats(
+    filteredEvents,
     startDateKey,
     endDateKey,
     timeZone,
     nowMs,
   );
-  const summary = computePeriodAverages(dailyStats);
+  const rawSummary = computePeriodAverages(rawDailyStats);
+
+  const dailyStats: ExportDailyStats[] = includePumping
+    ? rawDailyStats
+    : rawDailyStats.map(stripPumpingKeys);
+
+  const summary: ExportPeriodAverages = includePumping
+    ? rawSummary
+    : {
+        days: rawSummary.days,
+        totals: stripPumpingKeys(rawSummary.totals),
+        averagesPerDay: stripPumpingKeys(rawSummary.averagesPerDay),
+      };
 
   return {
     schemaVersion: 1,
@@ -356,6 +492,80 @@ export function exportBabyDataToJson(
 }
 
 // ============================================================================
+// Versioned JSON Backup Import
+// ============================================================================
+
+export const MAX_IMPORT_EVENTS = 50_000;
+
+export const ImportBabyJsonSchema = z.object({
+  schemaVersion: z.literal(1),
+  exportedAt: isoDateTimeSchema.optional(),
+  timeZone: z.string().min(1).max(100).optional(),
+  dateRange: z
+    .object({
+      startDateKey: isoDateSchema,
+      endDateKey: isoDateSchema,
+    })
+    .optional(),
+  baby: BabySchema,
+  events: z.array(TrackingEventSchema).max(MAX_IMPORT_EVENTS),
+});
+
+export type ImportBabyJson = z.infer<typeof ImportBabyJsonSchema>;
+
+export type ParseBabyDataJsonResult =
+  | { ok: true; data: ImportBabyJson }
+  | {
+      ok: false;
+      error: 'invalid_json' | 'unsupported_version' | 'validation_failed';
+      message: string;
+    };
+
+export function parseBabyDataJson(rawText: string): ParseBabyDataJsonResult {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(rawText);
+  } catch (err) {
+    return {
+      ok: false,
+      error: 'invalid_json',
+      message: err instanceof Error ? err.message : 'Invalid JSON syntax',
+    };
+  }
+
+  if (
+    raw !== null &&
+    typeof raw === 'object' &&
+    !Array.isArray(raw) &&
+    'schemaVersion' in raw &&
+    (raw as Record<string, unknown>).schemaVersion !== 1
+  ) {
+    return {
+      ok: false,
+      error: 'unsupported_version',
+      message: `Unsupported schemaVersion: ${String((raw as Record<string, unknown>).schemaVersion)}`,
+    };
+  }
+
+  const parsed = ImportBabyJsonSchema.safeParse(raw);
+  if (!parsed.success) {
+    const firstIssue = parsed.error.issues[0];
+    const pathStr = firstIssue?.path.length
+      ? `${firstIssue.path.join('.')}: `
+      : '';
+    return {
+      ok: false,
+      error: 'validation_failed',
+      message: firstIssue
+        ? `${pathStr}${firstIssue.message}`
+        : 'Backup file failed schema validation',
+    };
+  }
+
+  return { ok: true, data: parsed.data };
+}
+
+// ============================================================================
 // Pediatrician Text / Markdown Summary
 // ============================================================================
 
@@ -367,6 +577,7 @@ export interface PediatricianSummaryOptions {
   timeZone: string;
   format?: 'text' | 'markdown';
   nowMs?: number;
+  includePumping?: boolean;
 }
 
 function formatAgeFromDob(dob: string, referenceDateKey: string): string {
@@ -408,11 +619,16 @@ export function generatePediatricianSummary(
     timeZone,
     format = 'text',
     nowMs = Date.now(),
+    includePumping = true,
   } = options;
 
   const isMd = format === 'markdown';
+  const filteredEvents = includePumping
+    ? events
+    : events.filter((e) => e.type !== 'pumping');
+
   const dailyStats = computeDateRangeStats(
-    events,
+    filteredEvents,
     startDateKey,
     endDateKey,
     timeZone,
@@ -450,7 +666,11 @@ export function generatePediatricianSummary(
     `Diapers: ${totals.diaperEventCount} changes — ${totals.wetCount} wet (${averagesPerDay.wetCount.toFixed(1)}/day), ${totals.poopyCount} poopy (${averagesPerDay.poopyCount.toFixed(1)}/day), ${totals.bothCount} both${totals.rashCount > 0 ? `, ${totals.rashCount} rash flag(s)` : ''}`,
     `Spit-Up: ${totals.spitUpCount} total (${averagesPerDay.spitUpCount.toFixed(1)}/day avg)`,
     `Vitamins: ${totals.vitaminDaysCount}/${days} day${days === 1 ? '' : 's'} given`,
-    `Pumping: ${totals.pumpingCount} sessions (${Math.round(totals.pumpingTotalMl)} ml total, ${Math.round(averagesPerDay.pumpingTotalMl)} ml/day avg; ${formatHoursMinutes(totals.pumpingTotalSeconds)} total)`,
+    ...(includePumping
+      ? [
+          `Pumping: ${totals.pumpingCount} sessions (${Math.round(totals.pumpingTotalMl)} ml total, ${Math.round(averagesPerDay.pumpingTotalMl)} ml/day avg; ${formatHoursMinutes(totals.pumpingTotalSeconds)} total)`,
+        ]
+      : []),
     `Tummy Time: ${formatHoursMinutes(totals.tummyTimeTotalSeconds)} total (${formatHoursMinutes(averagesPerDay.tummyTimeTotalSeconds)}/day avg; ${totals.tummyTimeCount} sessions)`,
   ];
 
@@ -462,12 +682,15 @@ export function generatePediatricianSummary(
   lines.push(isMd ? '## Day-by-Day Breakdown' : 'DAY-BY-DAY BREAKDOWN');
 
   for (const day of dailyStats) {
-    const dayLine = `${day.dateKey}: Sleep ${formatHoursMinutes(day.totalSleepSeconds)}, Feeds ${day.totalFeedCount} (Breast ${formatHoursMinutes(day.breastTotalSeconds)}, Bottle ${Math.round(day.bottleTotalMl)} ml), Diapers ${day.wetCount}W/${day.poopyCount}P, Spit-ups ${day.spitUpCount}, Vitamins ${day.vitaminGiven ? 'Yes' : 'No'}, Pumping ${day.pumpingCount} (${Math.round(day.pumpingTotalMl)} ml), Tummy Time ${formatHoursMinutes(day.tummyTimeTotalSeconds)} (${day.tummyTimeCount})`;
+    const pumpingSegment = includePumping
+      ? `, Pumping ${day.pumpingCount} (${Math.round(day.pumpingTotalMl)} ml)`
+      : '';
+    const dayLine = `${day.dateKey}: Sleep ${formatHoursMinutes(day.totalSleepSeconds)}, Feeds ${day.totalFeedCount} (Breast ${formatHoursMinutes(day.breastTotalSeconds)}, Bottle ${Math.round(day.bottleTotalMl)} ml), Diapers ${day.wetCount}W/${day.poopyCount}P, Spit-ups ${day.spitUpCount}, Vitamins ${day.vitaminGiven ? 'Yes' : 'No'}${pumpingSegment}, Tummy Time ${formatHoursMinutes(day.tummyTimeTotalSeconds)} (${day.tummyTimeCount})`;
     lines.push(isMd ? `- ${dayLine}` : `  ${dayLine}`);
   }
 
   // Notable clinical notes: rash flags, large spit-ups, caregiver notes
-  const activeInRange = events
+  const activeInRange = filteredEvents
     .filter((e) => {
       if (e.deletedAt != null) return false;
       const dayKey = toLocalDateKey(e.startedAt, timeZone);
