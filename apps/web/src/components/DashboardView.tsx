@@ -225,7 +225,7 @@ export function DashboardView({
           aria-label={t('dashboard.breastfeeding')}
           className="bt-card bt-card-breast p-4"
         >
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-3 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2.5">
               <span className="bt-badge-breast inline-flex h-9 w-9 items-center justify-center rounded-xl">
                 <BabyIcon className="h-5 w-5" />
@@ -265,7 +265,7 @@ export function DashboardView({
               className="bt-focus-ring inline-flex min-h-[44px] items-center gap-1 rounded-xl px-2.5 text-xs font-medium text-teal-700 hover:bg-teal-50 dark:text-teal-300 dark:hover:bg-teal-950"
             >
               <Plus className="h-3.5 w-3.5" />
-              <span>{t('dashboard.manual')}</span>
+              <span>{t('dashboard.log')}</span>
             </button>
           </div>
 
@@ -415,7 +415,7 @@ export function DashboardView({
           aria-label={t('dashboard.bottleFeeding')}
           className="bt-card bt-card-bottle p-4"
         >
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-3 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2.5">
               <span className="bt-badge-bottle inline-flex h-9 w-9 items-center justify-center rounded-xl">
                 <Milk className="h-5 w-5" />
@@ -445,7 +445,7 @@ export function DashboardView({
               className="bt-focus-ring inline-flex min-h-[44px] items-center gap-1 rounded-xl px-2.5 text-xs font-medium text-sky-700 hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-950"
             >
               <Plus className="h-3.5 w-3.5" />
-              <span>{t('dashboard.logBottle')}</span>
+              <span>{t('dashboard.log')}</span>
             </button>
           </div>
 
@@ -467,9 +467,10 @@ export function DashboardView({
                   onClick={() =>
                     onOpenModal({ kind: 'bottle_finish', event: activeBottle })
                   }
-                  className="bt-focus-ring col-span-3 min-h-[44px] rounded-xl bg-sky-600 text-sm font-semibold text-white hover:bg-sky-700"
+                  className="bt-focus-ring col-span-3 inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-sky-600 px-3 text-sm font-semibold text-white hover:bg-sky-700"
                 >
-                  {t('dashboard.finishEnterVolume')}
+                  <Check className="h-4 w-4" />
+                  <span>{t('dashboard.finishLogVolume')}</span>
                 </button>
                 <button
                   type="button"
@@ -487,32 +488,23 @@ export function DashboardView({
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                disabled={busyAction !== null}
-                onClick={() =>
-                  void runAction('bottle_start', () =>
-                    startBottleFeed({
-                      babyId,
-                      userId,
-                      userName,
-                      milkType: 'breastmilk',
-                    }),
-                  )
-                }
-                className="bt-focus-ring min-h-[48px] rounded-xl bg-sky-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-sky-700 disabled:opacity-60"
-              >
-                {t('dashboard.startBottle')}
-              </button>
-              <button
-                type="button"
-                onClick={() => onOpenModal({ kind: 'bottle_manual' })}
-                className="bt-focus-ring min-h-[48px] rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-800 hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-950/60 dark:text-sky-200"
-              >
-                {t('dashboard.quickEntry')}
-              </button>
-            </div>
+            <button
+              type="button"
+              disabled={busyAction !== null}
+              onClick={() =>
+                void runAction('bottle_start', () =>
+                  startBottleFeed({
+                    babyId,
+                    userId,
+                    userName,
+                    milkType: 'breastmilk',
+                  }),
+                )
+              }
+              className="bt-focus-ring min-h-[48px] w-full rounded-xl bg-sky-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-sky-700 disabled:opacity-60"
+            >
+              {t('dashboard.startBottle')}
+            </button>
           )}
         </section>
 
@@ -521,7 +513,7 @@ export function DashboardView({
           aria-label={t('dashboard.sleep')}
           className="bt-card bt-card-sleep p-4"
         >
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-3 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2.5">
               <span className="bt-badge-sleep inline-flex h-9 w-9 items-center justify-center rounded-xl">
                 <Moon className="h-5 w-5" />
@@ -549,7 +541,7 @@ export function DashboardView({
               className="bt-focus-ring inline-flex min-h-[44px] items-center gap-1 rounded-xl px-2.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-indigo-950"
             >
               <Plus className="h-3.5 w-3.5" />
-              <span>{t('dashboard.manual')}</span>
+              <span>{t('dashboard.log')}</span>
             </button>
           </div>
 
@@ -576,9 +568,10 @@ export function DashboardView({
                       finishSleep({ babyId, userId }),
                     )
                   }
-                  className="bt-focus-ring col-span-3 min-h-[44px] rounded-xl bg-indigo-600 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+                  className="bt-focus-ring col-span-3 inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-indigo-600 px-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
                 >
-                  {t('dashboard.wakeUp')}
+                  <Check className="h-4 w-4" />
+                  <span>{t('dashboard.wakeUp')}</span>
                 </button>
                 <button
                   type="button"
@@ -631,7 +624,7 @@ export function DashboardView({
                 className="bt-focus-ring inline-flex min-h-[48px] items-center justify-center gap-1.5 rounded-xl bg-slate-800 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-slate-900 disabled:opacity-60 dark:bg-indigo-900 dark:hover:bg-indigo-800"
               >
                 <Moon className="h-4 w-4" />
-                <span>{t('dashboard.nightSleep')}</span>
+                <span>{t('dashboard.startNight')}</span>
               </button>
             </div>
           )}
@@ -642,7 +635,7 @@ export function DashboardView({
           aria-label={t('dashboard.diaperLog')}
           className="bt-card bt-card-diaper p-4"
         >
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-3 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2.5">
               <span className="bt-badge-diaper inline-flex h-9 w-9 items-center justify-center rounded-xl">
                 <Droplets className="h-5 w-5" />
@@ -671,7 +664,7 @@ export function DashboardView({
               className="bt-focus-ring inline-flex min-h-[44px] items-center gap-1 rounded-xl px-2.5 text-xs font-medium text-amber-700 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-950"
             >
               <Plus className="h-3.5 w-3.5" />
-              <span>{t('dashboard.details')}</span>
+              <span>{t('dashboard.log')}</span>
             </button>
           </div>
           <div className="grid grid-cols-3 gap-2.5">
@@ -707,34 +700,37 @@ export function DashboardView({
           aria-label={t('dashboard.spitUp')}
           className="bt-card bt-card-spitup p-4"
         >
-          <div className="mb-3 flex items-center gap-2.5">
-            <span className="bt-badge-spitup inline-flex h-9 w-9 items-center justify-center rounded-xl">
-              <Sparkles className="h-5 w-5" />
-            </span>
-            <div>
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                {t('dashboard.spitUp')}
-              </h2>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                {lastActivity.lastSpitUp
-                  ? t('dashboard.lastSpitUp', {
-                      severity: lastActivity.lastSpitUp.severity
-                        ? t(`common.${lastActivity.lastSpitUp.severity}`)
-                        : t('dashboard.loggedFallback'),
-                      ago: formatTimeAgo(
-                        lastActivity.lastSpitUp.secondsSinceStart,
-                      ),
-                    })
-                  : t('dashboard.noneLoggedToday')}
-              </p>
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <span className="bt-badge-spitup inline-flex h-9 w-9 items-center justify-center rounded-xl">
+                <Sparkles className="h-5 w-5" />
+              </span>
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  {t('dashboard.spitUp')}
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  {lastActivity.lastSpitUp
+                    ? t('dashboard.lastSpitUp', {
+                        severity: lastActivity.lastSpitUp.severity
+                          ? t(`common.${lastActivity.lastSpitUp.severity}`)
+                          : t('dashboard.loggedFallback'),
+                        ago: formatTimeAgo(
+                          lastActivity.lastSpitUp.secondsSinceStart,
+                        ),
+                      })
+                    : t('dashboard.noneLoggedToday')}
+                </p>
+              </div>
             </div>
           </div>
           <button
             type="button"
             onClick={() => onOpenModal({ kind: 'spit_up' })}
-            className="bt-focus-ring min-h-[48px] w-full rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-800 hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-950/60 dark:text-rose-200"
+            className="bt-focus-ring inline-flex min-h-[48px] w-full items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-800 hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-950/60 dark:text-rose-200"
           >
-            {t('dashboard.logSpitUp')}
+            <Plus className="h-4 w-4" />
+            <span>{t('dashboard.logSpitUp')}</span>
           </button>
         </section>
 
@@ -743,7 +739,7 @@ export function DashboardView({
           aria-label={t('dashboard.vitamins')}
           className="bt-card bt-card-vitamin p-4"
         >
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-3 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2.5">
               <span className="bt-badge-vitamin inline-flex h-9 w-9 items-center justify-center rounded-xl">
                 <Pill className="h-5 w-5" />
@@ -856,7 +852,7 @@ export function DashboardView({
               className="bt-focus-ring inline-flex min-h-[44px] items-center gap-1 rounded-xl px-2.5 text-xs font-medium text-purple-700 hover:bg-purple-50 dark:text-purple-300 dark:hover:bg-purple-950"
             >
               <Plus className="h-3.5 w-3.5" />
-              <span>{t('dashboard.logPump')}</span>
+              <span>{t('dashboard.log')}</span>
             </button>
           </div>
 
@@ -908,27 +904,18 @@ export function DashboardView({
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                disabled={busyAction !== null}
-                onClick={() =>
-                  void runAction('pumping:start', () =>
-                    startPumping({ babyId, userId, userName }),
-                  )
-                }
-                className="bt-focus-ring min-h-[48px] rounded-xl bg-purple-600 px-3 py-2 text-sm font-semibold text-white hover:bg-purple-700 disabled:opacity-60"
-              >
-                {t('dashboard.startPump')}
-              </button>
-              <button
-                type="button"
-                onClick={() => onOpenModal({ kind: 'pumping_manual' })}
-                className="bt-focus-ring min-h-[48px] rounded-xl border border-purple-200 bg-purple-50 px-3 py-2 text-sm font-semibold text-purple-800 hover:bg-purple-100 dark:border-purple-800 dark:bg-purple-950/60 dark:text-purple-200"
-              >
-                {t('dashboard.quickEntry')}
-              </button>
-            </div>
+            <button
+              type="button"
+              disabled={busyAction !== null}
+              onClick={() =>
+                void runAction('pumping:start', () =>
+                  startPumping({ babyId, userId, userName }),
+                )
+              }
+              className="bt-focus-ring min-h-[48px] w-full rounded-xl bg-purple-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-purple-700 disabled:opacity-60"
+            >
+              {t('dashboard.startPump')}
+            </button>
           )}
         </section>
 
@@ -968,7 +955,7 @@ export function DashboardView({
               className="bt-focus-ring inline-flex min-h-[44px] items-center gap-1 rounded-xl px-2.5 text-xs font-medium text-orange-700 hover:bg-orange-50 dark:text-orange-300 dark:hover:bg-orange-950"
             >
               <Plus className="h-3.5 w-3.5" />
-              <span>{t('dashboard.logTummyTime')}</span>
+              <span>{t('dashboard.log')}</span>
             </button>
           </div>
 
@@ -1019,27 +1006,18 @@ export function DashboardView({
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                disabled={busyAction !== null}
-                onClick={() =>
-                  void runAction('tummy:start', () =>
-                    startTummyTime({ babyId, userId, userName }),
-                  )
-                }
-                className="bt-focus-ring min-h-[48px] rounded-xl bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-60"
-              >
-                {t('dashboard.startTimer')}
-              </button>
-              <button
-                type="button"
-                onClick={() => onOpenModal({ kind: 'tummy_time_manual' })}
-                className="bt-focus-ring min-h-[48px] rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-800 hover:bg-orange-100 dark:border-orange-800 dark:bg-orange-950/60 dark:text-orange-200"
-              >
-                {t('dashboard.quickEntry')}
-              </button>
-            </div>
+            <button
+              type="button"
+              disabled={busyAction !== null}
+              onClick={() =>
+                void runAction('tummy:start', () =>
+                  startTummyTime({ babyId, userId, userName }),
+                )
+              }
+              className="bt-focus-ring min-h-[48px] w-full rounded-xl bg-orange-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-orange-700 disabled:opacity-60"
+            >
+              {t('dashboard.startTummyTime')}
+            </button>
           )}
         </section>
       </section>

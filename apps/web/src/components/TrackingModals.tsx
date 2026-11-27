@@ -408,7 +408,7 @@ export function BreastFeedModal({
             disabled={saving}
             className="bt-focus-ring min-h-[44px] rounded-xl bg-teal-600 px-5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
           >
-            {saving ? t('common.saving') : t('common.save')}
+            {saving ? t('common.saving') : t('modals.breast.saveBreast')}
           </button>
         </div>
       </form>
