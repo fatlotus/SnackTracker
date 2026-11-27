@@ -66,11 +66,62 @@ export type LogoutResponse = z.infer<typeof LogoutResponseSchema>;
 // Baby, Members & Invites
 // ============================================================================
 
-export const BabyRoleSchema = z.enum(['owner', 'caregiver', 'viewer']);
+export const BabyRoleSchema = z.enum(['parent', 'caregiver', 'viewer']);
 export type BabyRole = z.infer<typeof BabyRoleSchema>;
 
-export const InviteRoleSchema = z.enum(['caregiver', 'viewer']);
+export const InviteRoleSchema = z.enum(['parent', 'caregiver', 'viewer']);
 export type InviteRole = z.infer<typeof InviteRoleSchema>;
+
+export const ROLE_RANK: Record<BabyRole, number> = {
+  viewer: 0,
+  caregiver: 1,
+  parent: 2,
+};
+
+export function normalizeBabyRole(role: string): BabyRole {
+  if (role === 'owner' || role === 'parent') return 'parent';
+  if (role === 'caregiver') return 'caregiver';
+  return 'viewer';
+}
+
+export function canAccessPumping(role: BabyRole): boolean {
+  return role === 'parent';
+}
+
+export function canEditEvents(role: BabyRole): boolean {
+  return role === 'parent' || role === 'caregiver';
+}
+
+export function canManageBaby(role: BabyRole): boolean {
+  return role === 'parent';
+}
+
+export function canInviteMembers(role: BabyRole): boolean {
+  return role === 'parent' || role === 'caregiver';
+}
+
+export function getAssignableRoles(actorRole: BabyRole): BabyRole[] {
+  if (actorRole === 'parent') return ['parent', 'caregiver', 'viewer'];
+  if (actorRole === 'caregiver') return ['caregiver', 'viewer'];
+  return [];
+}
+
+export function canAssignRole(
+  actorRole: BabyRole,
+  targetRole: BabyRole,
+): boolean {
+  return getAssignableRoles(actorRole).includes(targetRole);
+}
+
+export function canManageMember(
+  actorRole: BabyRole,
+  targetCurrentRole: BabyRole,
+): boolean {
+  return (
+    actorRole !== 'viewer' &&
+    ROLE_RANK[actorRole] >= ROLE_RANK[targetCurrentRole]
+  );
+}
 
 export const BabySchema = z.object({
   id: uuidSchema,
@@ -156,6 +207,18 @@ export const ListMembersResponseSchema = z.object({
   members: z.array(BabyMemberSchema),
 });
 export type ListMembersResponse = z.infer<typeof ListMembersResponseSchema>;
+
+export const UpdateMemberRoleInputSchema = z.object({
+  role: BabyRoleSchema,
+});
+export type UpdateMemberRoleInput = z.infer<typeof UpdateMemberRoleInputSchema>;
+
+export const UpdateMemberRoleResponseSchema = z.object({
+  member: BabyMemberSchema,
+});
+export type UpdateMemberRoleResponse = z.infer<
+  typeof UpdateMemberRoleResponseSchema
+>;
 
 // ============================================================================
 // Tracking Events (Discriminated Union)

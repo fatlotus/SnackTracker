@@ -3,12 +3,15 @@ import {
   AcceptInviteInputSchema,
   AuthResponseSchema,
   BabyMemberSchema,
+  BabyRoleSchema,
   BabySchema,
   CreateBabyInputSchema,
   CreateInviteInputSchema,
   HealthzResponseSchema,
+  InviteRoleSchema,
   LoginInputSchema,
   LogoutResponseSchema,
+  ROLE_RANK,
   RegisterInputSchema,
   SyncPullQuerySchema,
   SyncPullResponseSchema,
@@ -16,9 +19,18 @@ import {
   SyncPushResponseSchema,
   TrackingEventSchema,
   UpdateBabyInputSchema,
+  UpdateMemberRoleInputSchema,
   UserSchema,
+  canAccessPumping,
+  canAssignRole,
+  canEditEvents,
+  canInviteMembers,
+  canManageBaby,
+  canManageMember,
+  getAssignableRoles,
   isoDateSchema,
   isoDateTimeSchema,
+  normalizeBabyRole,
   serverSeqSchema,
   uuidSchema,
 } from '../schemas.js';
@@ -111,7 +123,7 @@ describe('auth & baby schemas', () => {
       babyId: UUID_1,
       userId: UUID_2,
       displayName: 'Alex',
-      role: 'owner' as const,
+      role: 'parent' as const,
       joinedAt: TS_1,
       updatedAt: TS_1,
       deletedAt: null,
@@ -120,7 +132,81 @@ describe('auth & baby schemas', () => {
 
     const inviteDefaults = CreateInviteInputSchema.parse({});
     expect(inviteDefaults).toEqual({ role: 'caregiver', expiresInHours: 48 });
+    expect(CreateInviteInputSchema.parse({ role: 'parent' })).toEqual({
+      role: 'parent',
+      expiresInHours: 48,
+    });
     expect(AcceptInviteInputSchema.safeParse({ code: 'AB12CD' }).success).toBe(true);
+    expect(UpdateMemberRoleInputSchema.safeParse({ role: 'parent' }).success).toBe(true);
+    expect(UpdateMemberRoleInputSchema.safeParse({ role: 'owner' }).success).toBe(false);
+  });
+});
+
+describe('role hierarchy & capability helpers', () => {
+  it('validates 3-tier BabyRoleSchema and InviteRoleSchema and rejects legacy owner', () => {
+    for (const role of ['parent', 'caregiver', 'viewer'] as const) {
+      expect(BabyRoleSchema.safeParse(role).success).toBe(true);
+      expect(InviteRoleSchema.safeParse(role).success).toBe(true);
+    }
+    expect(BabyRoleSchema.safeParse('owner').success).toBe(false);
+    expect(InviteRoleSchema.safeParse('owner').success).toBe(false);
+    expect(ROLE_RANK).toEqual({ viewer: 0, caregiver: 1, parent: 2 });
+  });
+
+  it('normalizes legacy owner to parent and preserves caregiver/viewer', () => {
+    expect(normalizeBabyRole('owner')).toBe('parent');
+    expect(normalizeBabyRole('parent')).toBe('parent');
+    expect(normalizeBabyRole('caregiver')).toBe('caregiver');
+    expect(normalizeBabyRole('viewer')).toBe('viewer');
+    expect(normalizeBabyRole('unknown')).toBe('viewer');
+  });
+
+  it('enforces capability helpers across parent, caregiver, and viewer', () => {
+    expect(canAccessPumping('parent')).toBe(true);
+    expect(canAccessPumping('caregiver')).toBe(false);
+    expect(canAccessPumping('viewer')).toBe(false);
+
+    expect(canEditEvents('parent')).toBe(true);
+    expect(canEditEvents('caregiver')).toBe(true);
+    expect(canEditEvents('viewer')).toBe(false);
+
+    expect(canManageBaby('parent')).toBe(true);
+    expect(canManageBaby('caregiver')).toBe(false);
+    expect(canManageBaby('viewer')).toBe(false);
+
+    expect(canInviteMembers('parent')).toBe(true);
+    expect(canInviteMembers('caregiver')).toBe(true);
+    expect(canInviteMembers('viewer')).toBe(false);
+  });
+
+  it('enforces role assignment ceiling and member management hierarchy', () => {
+    expect(getAssignableRoles('parent')).toEqual(['parent', 'caregiver', 'viewer']);
+    expect(getAssignableRoles('caregiver')).toEqual(['caregiver', 'viewer']);
+    expect(getAssignableRoles('viewer')).toEqual([]);
+
+    expect(canAssignRole('parent', 'parent')).toBe(true);
+    expect(canAssignRole('parent', 'caregiver')).toBe(true);
+    expect(canAssignRole('parent', 'viewer')).toBe(true);
+
+    expect(canAssignRole('caregiver', 'parent')).toBe(false);
+    expect(canAssignRole('caregiver', 'caregiver')).toBe(true);
+    expect(canAssignRole('caregiver', 'viewer')).toBe(true);
+
+    expect(canAssignRole('viewer', 'viewer')).toBe(false);
+    expect(canAssignRole('viewer', 'caregiver')).toBe(false);
+    expect(canAssignRole('viewer', 'parent')).toBe(false);
+
+    expect(canManageMember('parent', 'parent')).toBe(true);
+    expect(canManageMember('parent', 'caregiver')).toBe(true);
+    expect(canManageMember('parent', 'viewer')).toBe(true);
+
+    expect(canManageMember('caregiver', 'parent')).toBe(false);
+    expect(canManageMember('caregiver', 'caregiver')).toBe(true);
+    expect(canManageMember('caregiver', 'viewer')).toBe(true);
+
+    expect(canManageMember('viewer', 'viewer')).toBe(false);
+    expect(canManageMember('viewer', 'caregiver')).toBe(false);
+    expect(canManageMember('viewer', 'parent')).toBe(false);
   });
 });
 
