@@ -1,4 +1,5 @@
 import {
+  BabyMemberSchema,
   BabySchema,
   localDayBounds,
   toLocalDateKey,
@@ -75,7 +76,10 @@ function makeOutboxItem(
 // ============================================================================
 
 export async function createBaby(
-  input: CreateBabyInput & { createdByUserId: string },
+  input: CreateBabyInput & {
+    createdByUserId: string;
+    createdByDisplayName?: string | null;
+  },
 ): Promise<Baby> {
   const now = nowIso();
   const baby = BabySchema.parse({
@@ -93,6 +97,18 @@ export async function createBaby(
     serverSeq: 0,
   });
 
+  const optimisticMember = BabyMemberSchema.parse({
+    id: uuidv4(),
+    babyId: baby.id,
+    userId: input.createdByUserId,
+    displayName: input.createdByDisplayName ?? null,
+    role: 'parent',
+    joinedAt: now,
+    updatedAt: now,
+    deletedAt: null,
+    serverSeq: 0,
+  });
+
   const outboxItem = makeOutboxItem(
     'baby',
     baby.id,
@@ -102,9 +118,10 @@ export async function createBaby(
   );
 
   const db = await getDb();
-  const tx = db.transaction(['babies', 'outbox'], 'readwrite');
+  const tx = db.transaction(['babies', 'baby_members', 'outbox'], 'readwrite');
   await Promise.all([
     tx.objectStore('babies').put(baby),
+    tx.objectStore('baby_members').put(optimisticMember),
     tx.objectStore('outbox').put(outboxItem),
     tx.done,
   ]);
@@ -1376,4 +1393,170 @@ export async function logTummyTime(input: {
   };
 
   return (await putEventAtomic(event, 'upsert')) as TummyTimeEvent;
+}
+
+// ============================================================================
+// Bulk JSON Backup Import (Atomic IDB + Outbox, no sleep auto-end)
+// ============================================================================
+
+export interface ImportEventsOptions {
+  babyId: string;
+  backupBabyId: string;
+  events: readonly TrackingEvent[];
+  userId: string;
+  userName?: string | null;
+  allowPumping: boolean;
+  overwriteExisting?: boolean;
+}
+
+export interface ImportEventsResult {
+  importedCount: number;
+  overwrittenCount: number;
+  skippedExistingCount: number;
+  skippedPumpingCount: number;
+  skippedDeletedCount: number;
+}
+
+export async function importEventsForBaby(
+  options: ImportEventsOptions,
+): Promise<ImportEventsResult> {
+  const {
+    babyId,
+    backupBabyId,
+    events,
+    userId,
+    userName = null,
+    allowPumping,
+    overwriteExisting = false,
+  } = options;
+
+  const isSameBaby = backupBabyId === babyId;
+  const now = nowIso();
+
+  let importedCount = 0;
+  let overwrittenCount = 0;
+  let skippedExistingCount = 0;
+  let skippedPumpingCount = 0;
+  let skippedDeletedCount = 0;
+
+  const db = await getDb();
+  const tx = db.transaction(['events', 'outbox'], 'readwrite');
+  const eventsStore = tx.objectStore('events');
+  const outboxStore = tx.objectStore('outbox');
+
+  const existingList = await eventsStore.index('by-babyId').getAll(babyId);
+  const existingMap = new Map<string, TrackingEvent>(
+    existingList.map((e) => [e.id, e]),
+  );
+
+  if (isSameBaby) {
+    for (const ev of events) {
+      if (ev.deletedAt != null) {
+        skippedDeletedCount += 1;
+        continue;
+      }
+      if (!allowPumping && ev.type === 'pumping') {
+        skippedPumpingCount += 1;
+        continue;
+      }
+      const existing = existingMap.get(ev.id);
+      if (existing && !existing.deletedAt && !overwriteExisting) {
+        skippedExistingCount += 1;
+        continue;
+      }
+
+      const normalized = TrackingEventSchema.parse({
+        ...ev,
+        babyId,
+        deletedAt: null,
+        updatedAt: now,
+        updatedByUserId: userId,
+        loggedByName: ev.loggedByName ?? userName ?? null,
+      });
+
+      const outboxItem = makeOutboxItem(
+        'event',
+        normalized.id,
+        'upsert',
+        normalized as unknown as Record<string, unknown>,
+        now,
+      );
+
+      await eventsStore.put(normalized);
+      await outboxStore.put(outboxItem);
+
+      if (existing && !existing.deletedAt) {
+        overwrittenCount += 1;
+      } else {
+        importedCount += 1;
+      }
+    }
+  } else {
+    const eligible: TrackingEvent[] = [];
+    const idMap = new Map<string, string>();
+
+    for (const ev of events) {
+      if (ev.deletedAt != null) {
+        skippedDeletedCount += 1;
+        continue;
+      }
+      if (!allowPumping && ev.type === 'pumping') {
+        skippedPumpingCount += 1;
+        continue;
+      }
+      eligible.push(ev);
+      idMap.set(ev.id, uuidv4());
+    }
+
+    for (const ev of eligible) {
+      const newId = idMap.get(ev.id)!;
+      const nextPayload =
+        ev.type === 'spit_up'
+          ? {
+              ...ev.payload,
+              relatedFeedId: ev.payload.relatedFeedId
+                ? (idMap.get(ev.payload.relatedFeedId) ?? null)
+                : ev.payload.relatedFeedId,
+            }
+          : ev.payload;
+
+      const normalized = TrackingEventSchema.parse({
+        ...ev,
+        id: newId,
+        babyId,
+        deletedAt: null,
+        updatedAt: now,
+        updatedByUserId: userId,
+        loggedByName: ev.loggedByName ?? userName ?? null,
+        serverSeq: 0,
+        payload: nextPayload,
+      });
+
+      const outboxItem = makeOutboxItem(
+        'event',
+        normalized.id,
+        'upsert',
+        normalized as unknown as Record<string, unknown>,
+        now,
+      );
+
+      await eventsStore.put(normalized);
+      await outboxStore.put(outboxItem);
+      importedCount += 1;
+    }
+  }
+
+  await tx.done;
+
+  if (importedCount + overwrittenCount > 0) {
+    notifyStoreChange();
+  }
+
+  return {
+    importedCount,
+    overwrittenCount,
+    skippedExistingCount,
+    skippedPumpingCount,
+    skippedDeletedCount,
+  };
 }

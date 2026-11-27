@@ -16,9 +16,15 @@ interface TrendsViewProps {
   events: TrackingEvent[];
   volumeUnit: VolumeUnit;
   nowMs: number;
+  canAccessPumping?: boolean;
 }
 
-export function TrendsView({ events, volumeUnit, nowMs }: TrendsViewProps) {
+export function TrendsView({
+  events,
+  volumeUnit,
+  nowMs,
+  canAccessPumping = true,
+}: TrendsViewProps) {
   const { t, locale, formatDurationShort, formatVolume, buildTrendSeries } =
     useI18n();
   const [days, setDays] = useState<7 | 14 | 30>(7);
@@ -145,19 +151,21 @@ export function TrendsView({ events, volumeUnit, nowMs }: TrendsViewProps) {
             {averagesPerDay.spitUpCount.toFixed(1)}
           </p>
         </div>
-        <div className="bt-card bt-card-pumping p-4">
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            {t('trends.avgPumpingDay')}
-          </p>
-          <p className="tabular-nums-clock mt-1 text-xl font-bold text-purple-700 dark:text-purple-300">
-            {formatVolume(averagesPerDay.pumpingTotalMl, volumeUnit)}
-          </p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            {t('trends.pumpingSessionsAvg', {
-              count: averagesPerDay.pumpingCount.toFixed(1),
-            })}
-          </p>
-        </div>
+        {canAccessPumping && (
+          <div className="bt-card bt-card-pumping p-4">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {t('trends.avgPumpingDay')}
+            </p>
+            <p className="tabular-nums-clock mt-1 text-xl font-bold text-purple-700 dark:text-purple-300">
+              {formatVolume(averagesPerDay.pumpingTotalMl, volumeUnit)}
+            </p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {t('trends.pumpingSessionsAvg', {
+                count: averagesPerDay.pumpingCount.toFixed(1),
+              })}
+            </p>
+          </div>
+        )}
         <div className="bt-card bt-card-tummy p-4">
           <p className="text-xs text-slate-500 dark:text-slate-400">
             {t('trends.avgTummyTimeDay')}
@@ -335,49 +343,55 @@ export function TrendsView({ events, volumeUnit, nowMs }: TrendsViewProps) {
       </div>
 
       {/* Pumping & Tummy Time Charts */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="bt-card bt-card-pumping p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-semibold">
-              {t('trends.pumpingChartTitle', {
-                unit: t(`common.${volumeUnit}`),
+      <div
+        className={
+          canAccessPumping ? 'grid gap-4 lg:grid-cols-2' : 'grid gap-4'
+        }
+      >
+        {canAccessPumping && (
+          <div className="bt-card bt-card-pumping p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">
+                {t('trends.pumpingChartTitle', {
+                  unit: t(`common.${volumeUnit}`),
+                })}
+              </h3>
+            </div>
+            <div
+              role="img"
+              aria-label={t('trends.pumpingChartAria', {
+                days,
+                avg: formatVolume(averagesPerDay.pumpingTotalMl, volumeUnit),
               })}
-            </h3>
-          </div>
-          <div
-            role="img"
-            aria-label={t('trends.pumpingChartAria', {
-              days,
-              avg: formatVolume(averagesPerDay.pumpingTotalMl, volumeUnit),
-            })}
-            className="flex h-36 items-end gap-1.5 overflow-x-auto pb-1"
-          >
-            {series.map((d) => {
-              const pct = (d.pumpingVolume / maxPumpingVolume) * 100;
-              return (
-                <div
-                  key={d.dateKey}
-                  className="flex min-w-[20px] flex-1 flex-col items-center gap-1"
-                  title={
-                    locale === 'zh-CN'
-                      ? `${d.dateKey}：${d.pumpingVolume} ${t(`common.${volumeUnit}`)}（${d.pumpingCount}次）`
-                      : `${d.dateKey}: ${d.pumpingVolume} ${volumeUnit} (${d.pumpingCount} sessions)`
-                  }
-                >
-                  <div className="flex h-24 w-full flex-col justify-end overflow-hidden rounded-t-md bg-slate-100 dark:bg-slate-800">
-                    <div
-                      className="w-full bg-purple-500 transition-all"
-                      style={{ height: `${pct}%` }}
-                    />
+              className="flex h-36 items-end gap-1.5 overflow-x-auto pb-1"
+            >
+              {series.map((d) => {
+                const pct = (d.pumpingVolume / maxPumpingVolume) * 100;
+                return (
+                  <div
+                    key={d.dateKey}
+                    className="flex min-w-[20px] flex-1 flex-col items-center gap-1"
+                    title={
+                      locale === 'zh-CN'
+                        ? `${d.dateKey}：${d.pumpingVolume} ${t(`common.${volumeUnit}`)}（${d.pumpingCount}次）`
+                        : `${d.dateKey}: ${d.pumpingVolume} ${volumeUnit} (${d.pumpingCount} sessions)`
+                    }
+                  >
+                    <div className="flex h-24 w-full flex-col justify-end overflow-hidden rounded-t-md bg-slate-100 dark:bg-slate-800">
+                      <div
+                        className="w-full bg-purple-500 transition-all"
+                        style={{ height: `${pct}%` }}
+                      />
+                    </div>
+                    <span className="tabular-nums-clock text-[10px] text-slate-500 dark:text-slate-400">
+                      {d.shortLabel}
+                    </span>
                   </div>
-                  <span className="tabular-nums-clock text-[10px] text-slate-500 dark:text-slate-400">
-                    {d.shortLabel}
-                  </span>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="bt-card bt-card-tummy p-4">
           <div className="mb-3 flex items-center justify-between">

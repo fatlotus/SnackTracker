@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import './index.css';
-import type { Baby, DiaperEvent, TrackingEvent, User } from '@baby-tracker/shared';
+import {
+  canAccessPumping,
+  canEditEvents,
+  type Baby,
+  type BabyRole,
+  type DiaperEvent,
+  type TrackingEvent,
+  type User,
+} from '@baby-tracker/shared';
 import {
   Baby as BabyIcon,
   BarChart3,
@@ -23,6 +31,7 @@ import {
   deleteEvent,
   getActiveTimersForBaby,
   listBabies,
+  listBabyMembers,
   listEventsForBaby,
   subscribeStore,
   type ActiveTimersForBaby,
@@ -120,6 +129,7 @@ export function App() {
 
   const [babies, setBabies] = useState<Baby[]>([]);
   const [activeBabyId, setActiveBabyId] = useState<string | null>(readStoredBabyId);
+  const [activeRole, setActiveRole] = useState<BabyRole>('viewer');
   const [events, setEvents] = useState<TrackingEvent[]>([]);
   const [timers, setTimers] = useState<ActiveTimersForBaby>({
     breastFeed: null,
@@ -148,6 +158,8 @@ export function App() {
 
   const activeBabyIdRef = useRef<string | null>(activeBabyId);
   activeBabyIdRef.current = activeBabyId;
+  const userIdRef = useRef<string | null>(user?.id ?? null);
+  userIdRef.current = user?.id ?? null;
   const refreshSeqRef = useRef(0);
 
   // Responsive desktop breakpoint listener for single active LanguageSwitcher testid
@@ -186,7 +198,7 @@ export function App() {
     }
   }, []);
 
-  // Load babies & active baby's events from IDB
+  // Load babies & active baby's events + role from IDB
   const refreshFromStore = useCallback(async () => {
     const seq = ++refreshSeqRef.current;
     const allBabies = await listBabies();
@@ -194,24 +206,37 @@ export function App() {
     setBabies(allBabies);
 
     const currentActiveId = activeBabyIdRef.current;
-    const targetId =
-      allBabies.find((b) => b.id === currentActiveId)?.id ??
-      allBabies[0]?.id ??
-      null;
+    const targetBaby =
+      allBabies.find((b) => b.id === currentActiveId) ?? allBabies[0] ?? null;
+    const targetId = targetBaby?.id ?? null;
 
     if (targetId !== currentActiveId && targetId !== null) {
       handleSelectBaby(targetId);
     }
 
-    if (targetId) {
-      const [evList, activeTimers] = await Promise.all([
+    if (targetId && targetBaby) {
+      const [evList, activeTimers, memberList] = await Promise.all([
         listEventsForBaby(targetId),
         getActiveTimersForBaby(targetId),
+        listBabyMembers(targetId),
       ]);
       if (seq !== refreshSeqRef.current) return;
+      const currentUserId = userIdRef.current;
+      const myMembership = currentUserId
+        ? memberList.find((m) => m.userId === currentUserId && !m.deletedAt)
+        : undefined;
+      const derivedRole: BabyRole = myMembership
+        ? myMembership.role
+        : memberList.length === 0 &&
+            currentUserId !== null &&
+            targetBaby.createdByUserId === currentUserId
+          ? 'parent'
+          : 'viewer';
+      setActiveRole(derivedRole);
       setEvents(evList);
       setTimers(activeTimers);
     } else {
+      setActiveRole('viewer');
       setEvents([]);
       setTimers({
         breastFeed: null,
@@ -315,13 +340,22 @@ export function App() {
     };
   }, [user, pendingInviteCode, handleSelectBaby, t]);
 
+  const canPump = canAccessPumping(activeRole);
+  const canWrite = canEditEvents(activeRole);
+  const visibleEvents = canPump
+    ? events
+    : events.filter((e) => e.type !== 'pumping');
+  const visibleTimers: ActiveTimersForBaby = canPump
+    ? timers
+    : { ...timers, pumping: null };
+
   // Live 1s timer tick when any timer is active; 15s otherwise
   const hasActiveTimer = Boolean(
-    timers.breastFeed ||
-      timers.bottleFeed ||
-      timers.sleep ||
-      timers.pumping ||
-      timers.tummyTime,
+    visibleTimers.breastFeed ||
+      visibleTimers.bottleFeed ||
+      visibleTimers.sleep ||
+      visibleTimers.pumping ||
+      visibleTimers.tummyTime,
   );
   useEffect(() => {
     const intervalMs = hasActiveTimer ? 1000 : 15_000;
@@ -343,6 +377,7 @@ export function App() {
       await logout();
       setUser(null);
       setBabies([]);
+      setActiveRole('viewer');
       setEvents([]);
       setTimers({
         breastFeed: null,
@@ -677,8 +712,9 @@ export function App() {
         <ActiveTimersBanner
           babyId={activeBaby.id}
           userId={user.id}
-          timers={timers}
+          timers={visibleTimers}
           nowMs={nowMs}
+          canAccessPumping={canPump}
           onFinishBottle={(ev) =>
             setModal({ kind: 'bottle_finish', event: ev })
           }
@@ -695,10 +731,11 @@ export function App() {
               babyId={activeBaby.id}
               userId={user.id}
               userName={user.displayName}
-              events={events}
-              timers={timers}
+              events={visibleEvents}
+              timers={visibleTimers}
               nowMs={nowMs}
               volumeUnit={volumeUnit}
+              canAccessPumping={canPump}
               onOpenModal={setModal}
               onDiaperQuickLogged={handleDiaperQuickLogged}
               onViewTimeline={(dateKey) => {
@@ -711,10 +748,11 @@ export function App() {
           {activeTab === 'timeline' && (
             <TimelineView
               key={timelineResetNonce}
-              events={events}
+              events={visibleEvents}
               userId={user.id}
               volumeUnit={volumeUnit}
               nowMs={nowMs}
+              canAccessPumping={canPump}
               initialDateKey={timelineInitialDateKey}
               onEditEvent={(ev) => setModal({ kind: 'edit', event: ev })}
             />
@@ -722,18 +760,23 @@ export function App() {
 
           {activeTab === 'trends' && (
             <TrendsView
-              events={events}
+              events={visibleEvents}
               volumeUnit={volumeUnit}
               nowMs={nowMs}
+              canAccessPumping={canPump}
             />
           )}
 
           {activeTab === 'export' && (
             <ExportPage
               baby={activeBaby}
-              events={events}
+              events={visibleEvents}
               volumeUnit={volumeUnit}
               nowMs={nowMs}
+              userId={user.id}
+              userName={user.displayName}
+              canWrite={canWrite}
+              canAccessPumping={canPump}
             />
           )}
 
@@ -741,6 +784,7 @@ export function App() {
             <SettingsSharePage
               user={user}
               baby={activeBaby}
+              activeRole={activeRole}
               syncStatus={syncStatus}
               theme={theme}
               volumeUnit={volumeUnit}
@@ -853,11 +897,11 @@ export function App() {
           babyId={activeBaby.id}
           userId={user.id}
           userName={user.displayName}
-          recentEvents={events}
+          recentEvents={visibleEvents}
           onClose={() => setModal(null)}
         />
       )}
-      {modal?.kind === 'pumping_manual' && (
+      {canPump && modal?.kind === 'pumping_manual' && (
         <PumpingModal
           babyId={activeBaby.id}
           userId={user.id}
@@ -866,7 +910,7 @@ export function App() {
           onClose={() => setModal(null)}
         />
       )}
-      {modal?.kind === 'pumping_finish' && (
+      {canPump && modal?.kind === 'pumping_finish' && (
         <PumpingModal
           babyId={activeBaby.id}
           userId={user.id}
@@ -926,12 +970,12 @@ export function App() {
           babyId={activeBaby.id}
           userId={user.id}
           userName={user.displayName}
-          recentEvents={events}
+          recentEvents={visibleEvents}
           existing={modal.event}
           onClose={() => setModal(null)}
         />
       )}
-      {modal?.kind === 'edit' && modal.event.type === 'pumping' && (
+      {canPump && modal?.kind === 'edit' && modal.event.type === 'pumping' && (
         <PumpingModal
           babyId={activeBaby.id}
           userId={user.id}

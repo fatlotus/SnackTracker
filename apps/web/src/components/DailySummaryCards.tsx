@@ -17,6 +17,13 @@ export const ALL_SUMMARY_CATEGORIES: readonly SummaryCardCategory[] = [
   'tummy_time',
 ];
 
+export const NON_PARENT_SUMMARY_CATEGORIES: readonly SummaryCardCategory[] = [
+  'feeding',
+  'sleep',
+  'diapers',
+  'tummy_time',
+];
+
 interface DailySummaryCardsProps {
   stats: DailyStats;
   volumeUnit: VolumeUnit;

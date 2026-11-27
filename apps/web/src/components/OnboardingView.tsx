@@ -59,6 +59,7 @@ export function OnboardingView({
         avatarColor,
         notes: notes.trim() ? notes.trim() : null,
         createdByUserId: user.id,
+        createdByDisplayName: user.displayName,
       });
       void syncOnce();
       onBabyReady(baby);

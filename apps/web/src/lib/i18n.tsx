@@ -502,6 +502,30 @@ const enUS = {
   'export.col.spitUp': 'Spit-Up',
   'export.col.pumping': 'Pumping',
   'export.col.tummyTime': 'Tummy Time',
+  'export.importTitle': 'Restore from JSON Backup',
+  'export.importSubtitle':
+    'Import events from a previously exported SnackTracker JSON backup into {name}.',
+  'export.importSelectFile': 'Choose JSON Backup File',
+  'export.importPreviewTitle': 'Backup Preview: {fileName}',
+  'export.importBackupBaby': 'Backup baby: {name} (DOB: {dob})',
+  'export.importDifferentBabyWarning':
+    'This backup was exported for "{backupName}", which is a different baby than "{activeName}". Events will be imported as new copies into "{activeName}".',
+  'export.importSummaryCounts':
+    '{total} events in file · {toImport} to import · {existing} already present',
+  'export.importPumpingSkipped':
+    '{count} pumping event(s) will be skipped (parent role required).',
+  'export.importOverwriteLabel': 'Overwrite existing events with matching IDs',
+  'export.importConfirm': 'Import {count} Events',
+  'export.importImporting': 'Importing…',
+  'export.importCancel': 'Cancel',
+  'export.importSuccess':
+    'Imported {imported} event(s){skippedPart}. Changes will sync automatically.',
+  'export.importSuccessSkipped': ' ({count} skipped)',
+  'export.importErrorInvalidJson': 'Could not read file: invalid JSON format.',
+  'export.importErrorUnsupportedVersion': 'Unsupported backup schema version.',
+  'export.importErrorValidation': 'Backup file failed validation: {detail}',
+  'export.importErrorTooLarge': 'File is too large (maximum 20 MB).',
+  'export.importErrorGeneric': 'Import failed: {detail}',
 
   // SettingsSharePage
   'settings.babyProfileTitle': 'Baby Profile: {name}',
@@ -521,8 +545,20 @@ const enUS = {
   'settings.saveChanges': 'Save Changes',
   'settings.familyCaregivers': 'Family & Caregivers',
   'settings.inviteRoleAria': 'Invite role',
+  'settings.role.parent': 'Parent (full access + pumping)',
   'settings.role.caregiver': 'Caregiver (can log & edit)',
   'settings.role.viewer': 'Viewer (read-only)',
+  'settings.roleName.parent': 'Parent',
+  'settings.roleName.caregiver': 'Caregiver',
+  'settings.roleName.viewer': 'Viewer',
+  'settings.rolePermissionsTitle': 'Role Permissions',
+  'settings.rolePerm.parent':
+    'Manage baby profile, family roles, and all logs including pumping.',
+  'settings.rolePerm.caregiver':
+    'Log and edit feeding, sleep, diaper, spit-up, vitamin, and tummy time.',
+  'settings.rolePerm.viewer':
+    'Read-only access to activity logs, trends, and exports.',
+  'settings.memberRoleAria': 'Role for {name}',
   'settings.generateInviteLink': 'Generate Invite Link',
   'settings.codeLabel': 'Code:',
   'settings.copied': 'Copied!',
@@ -549,9 +585,12 @@ const enUS = {
   'settings.err.archiveBaby': 'Failed to archive baby.',
   'settings.err.createBaby': 'Failed to create baby.',
   'settings.err.generateInvite':
-    'Failed to generate invite (are you online & owner?).',
+    'Failed to generate invite (are you online and permitted to invite?).',
   'settings.err.copyInvite': 'Failed to copy invite link.',
   'settings.err.removeMember': 'Failed to remove member.',
+  'settings.err.updateRole': 'Failed to update member role.',
+  'settings.err.lastParent':
+    'Cannot demote or remove the last parent for this baby.',
   'settings.err.invalidInvite': 'Enter a valid invite code or link.',
   'settings.err.joinBaby': 'Failed to join baby.',
 } as const;
@@ -1007,6 +1046,27 @@ const zhCN: Record<TranslationKey, string> = {
   'export.col.spitUp': '吐奶',
   'export.col.pumping': '吸奶',
   'export.col.tummyTime': '趴卧',
+  'export.importTitle': '从 JSON 备份恢复',
+  'export.importSubtitle': '将之前导出的 JSON 备份记录导入到 {name}。',
+  'export.importSelectFile': '选择 JSON 备份文件',
+  'export.importPreviewTitle': '备份预览：{fileName}',
+  'export.importBackupBaby': '备份宝宝：{name}（出生日期：{dob}）',
+  'export.importDifferentBabyWarning':
+    '此备份属于“{backupName}”，与当前宝宝“{activeName}”不同。记录将作为新副本导入到“{activeName}”。',
+  'export.importSummaryCounts':
+    '共 {total} 条记录 · 将导入 {toImport} 条 · 已存在 {existing} 条',
+  'export.importPumpingSkipped': '将跳过 {count} 条吸奶记录（需要家长权限）。',
+  'export.importOverwriteLabel': '覆盖已存在的同 ID 记录',
+  'export.importConfirm': '确认导入 {count} 条记录',
+  'export.importImporting': '正在导入…',
+  'export.importCancel': '取消',
+  'export.importSuccess': '已导入 {imported} 条记录{skippedPart}，更改将自动同步。',
+  'export.importSuccessSkipped': '（已跳过 {count} 条）',
+  'export.importErrorInvalidJson': '无法读取文件：JSON 格式无效。',
+  'export.importErrorUnsupportedVersion': '不支持的备份文件版本。',
+  'export.importErrorValidation': '备份文件校验失败：{detail}',
+  'export.importErrorTooLarge': '文件过大（最大 20 MB）。',
+  'export.importErrorGeneric': '导入失败：{detail}',
 
   // SettingsSharePage
   'settings.babyProfileTitle': '宝宝档案：{name}',
@@ -1026,8 +1086,19 @@ const zhCN: Record<TranslationKey, string> = {
   'settings.saveChanges': '保存修改',
   'settings.familyCaregivers': '家庭成员与共享',
   'settings.inviteRoleAria': '邀请角色',
+  'settings.role.parent': '家长（全部权限含吸奶记录）',
   'settings.role.caregiver': '照护者（可记录和编辑）',
   'settings.role.viewer': '查看者（只读）',
+  'settings.roleName.parent': '家长',
+  'settings.roleName.caregiver': '照护者',
+  'settings.roleName.viewer': '查看者',
+  'settings.rolePermissionsTitle': '角色权限说明',
+  'settings.rolePerm.parent':
+    '可管理宝宝档案、成员权限及包括吸奶在内的所有记录。',
+  'settings.rolePerm.caregiver':
+    '可记录和编辑喂养、睡眠、尿布、吐奶、维生素和趴卧记录。',
+  'settings.rolePerm.viewer': '仅查看活动记录、趋势分析和报告导出。',
+  'settings.memberRoleAria': '{name} 的角色',
   'settings.generateInviteLink': '生成邀请链接',
   'settings.codeLabel': '邀请码：',
   'settings.copied': '已复制！',
@@ -1053,9 +1124,11 @@ const zhCN: Record<TranslationKey, string> = {
   'settings.err.saveBaby': '保存宝宝档案失败。',
   'settings.err.archiveBaby': '归档宝宝失败。',
   'settings.err.createBaby': '创建宝宝失败。',
-  'settings.err.generateInvite': '生成邀请失败（请确认已联网且为创建者）。',
+  'settings.err.generateInvite': '生成邀请失败（请确认已联网且拥有邀请权限）。',
   'settings.err.copyInvite': '复制邀请链接失败。',
   'settings.err.removeMember': '移除成员失败。',
+  'settings.err.updateRole': '更新成员角色失败。',
+  'settings.err.lastParent': '无法降级或移除该宝宝的最后一位家长。',
   'settings.err.invalidInvite': '请输入有效的邀请码或链接。',
   'settings.err.joinBaby': '加入宝宝失败。',
 };

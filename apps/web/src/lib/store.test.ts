@@ -14,7 +14,9 @@ import {
   finishTummyTime,
   getActiveTimersForBaby,
   getBaby,
+  importEventsForBaby,
   listBabies,
+  listBabyMembers,
   listEventsForBaby,
   logBottleFeed,
   logDiaper,
@@ -724,5 +726,151 @@ describe('store (IndexedDB + atomic outbox + timers)', () => {
     expect(finishedTummy.payload.mood).toBe('neutral');
     expect(finishedTummy.notes).toBeNull();
     expect((await getActiveTimersForBaby(twinA.id)).tummyTime).toBeNull();
+  });
+
+  it('inserts an optimistic parent BabyMember row when creating a baby', async () => {
+    const baby = await createBaby({
+      name: 'Ansel',
+      dob: '2026-04-01',
+      createdByUserId: USER_ID,
+      createdByDisplayName: 'Jeremy',
+    });
+
+    const members = await listBabyMembers(baby.id);
+    expect(members).toHaveLength(1);
+    expect(members[0]).toMatchObject({
+      babyId: baby.id,
+      userId: USER_ID,
+      displayName: 'Jeremy',
+      role: 'parent',
+      deletedAt: null,
+    });
+  });
+
+  it('imports JSON backup events idempotently, supports overwrite/soft-delete restore, does not auto-end active sleep, remaps cross-baby IDs, and enforces allowPumping', async () => {
+    const babyA = await createBaby({
+      name: 'Baby A',
+      dob: '2026-03-01',
+      createdByUserId: USER_ID,
+    });
+    const babyB = await createBaby({
+      name: 'Baby B',
+      dob: '2026-03-02',
+      createdByUserId: USER_ID,
+    });
+
+    const feed = await logBottleFeed({
+      babyId: babyA.id,
+      userId: USER_ID,
+      startedAt: '2026-04-01T10:00:00.000Z',
+      endedAt: '2026-04-01T10:15:00.000Z',
+      volumeMl: 90,
+      milkType: 'breastmilk',
+      notes: 'original note',
+    });
+    const spitUp = await logSpitUp({
+      babyId: babyA.id,
+      userId: USER_ID,
+      startedAt: '2026-04-01T10:20:00.000Z',
+      severity: 'small',
+      relatedFeedId: feed.id,
+    });
+    const pump = await logPumping({
+      babyId: babyA.id,
+      userId: USER_ID,
+      startedAt: '2026-04-01T11:00:00.000Z',
+      endedAt: '2026-04-01T11:15:00.000Z',
+      volumeMl: 120,
+      side: 'both',
+    });
+    const deletedDiaper = await logDiaper({
+      babyId: babyA.id,
+      userId: USER_ID,
+      kind: 'wet',
+      startedAt: '2026-04-01T12:00:00.000Z',
+    });
+    await deleteEvent(deletedDiaper.id, USER_ID);
+
+    // Start an active sleep BEFORE the imported historical events to verify no auto-end
+    const activeSleep = await startSleep({
+      babyId: babyA.id,
+      category: 'nap',
+      userId: USER_ID,
+      startedAt: '2026-04-01T09:00:00.000Z',
+    });
+
+    // 1. Same-baby idempotency + soft-delete restore
+    const backupEvents = [
+      { ...feed, notes: 'edited in backup' },
+      spitUp,
+      pump,
+      { ...deletedDiaper, deletedAt: null },
+    ];
+
+    const res1 = await importEventsForBaby({
+      babyId: babyA.id,
+      backupBabyId: babyA.id,
+      events: backupEvents,
+      userId: USER_ID,
+      allowPumping: true,
+      overwriteExisting: false,
+    });
+    expect(res1).toMatchObject({
+      importedCount: 1, // restored deletedDiaper
+      overwrittenCount: 0,
+      skippedExistingCount: 3, // feed, spitUp, pump already active
+      skippedPumpingCount: 0,
+      skippedDeletedCount: 0,
+    });
+
+    // Active sleep must still be running (not auto-ended by import)
+    expect((await getActiveTimersForBaby(babyA.id)).sleep?.id).toBe(
+      activeSleep.id,
+    );
+    const afterRestore = await listEventsForBaby(babyA.id);
+    expect(afterRestore.find((e) => e.id === deletedDiaper.id)?.deletedAt).toBeNull();
+    expect(afterRestore.find((e) => e.id === feed.id)?.notes).toBe('original note');
+
+    // 2. Same-baby overwriteExisting: true
+    const res2 = await importEventsForBaby({
+      babyId: babyA.id,
+      backupBabyId: babyA.id,
+      events: [{ ...feed, notes: 'edited in backup' }],
+      userId: USER_ID,
+      allowPumping: true,
+      overwriteExisting: true,
+    });
+    expect(res2.overwrittenCount).toBe(1);
+    const afterOverwrite = await listEventsForBaby(babyA.id);
+    expect(afterOverwrite.find((e) => e.id === feed.id)?.notes).toBe(
+      'edited in backup',
+    );
+
+    // 3. Different-baby import with allowPumping: false + relatedFeedId remapping
+    const res3 = await importEventsForBaby({
+      babyId: babyB.id,
+      backupBabyId: babyA.id,
+      events: [feed, spitUp, pump],
+      userId: USER_ID,
+      allowPumping: false,
+    });
+    expect(res3).toMatchObject({
+      importedCount: 2, // feed + spitUp
+      overwrittenCount: 0,
+      skippedExistingCount: 0,
+      skippedPumpingCount: 1, // pump skipped
+      skippedDeletedCount: 0,
+    });
+
+    const babyBEvents = await listEventsForBaby(babyB.id);
+    expect(babyBEvents).toHaveLength(2);
+    expect(babyBEvents.some((e) => e.type === 'pumping')).toBe(false);
+    const copiedFeed = babyBEvents.find((e) => e.type === 'bottle_feed')!;
+    const copiedSpitUp = babyBEvents.find((e) => e.type === 'spit_up')!;
+    expect(copiedFeed.id).not.toBe(feed.id);
+    expect(copiedSpitUp.id).not.toBe(spitUp.id);
+    expect(copiedSpitUp.type === 'spit_up' && copiedSpitUp.payload.relatedFeedId).toBe(
+      copiedFeed.id,
+    );
   });
 });

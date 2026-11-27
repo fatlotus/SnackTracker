@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   addDays,
   computeDailyStats,
@@ -25,6 +25,7 @@ import { useI18n } from '../lib/i18n.js';
 import {
   ALL_SUMMARY_CATEGORIES,
   DailySummaryCards,
+  NON_PARENT_SUMMARY_CATEGORIES,
   type SummaryCardCategory,
 } from './DailySummaryCards.js';
 import {
@@ -49,6 +50,7 @@ interface TimelineViewProps {
   userId: string;
   volumeUnit: VolumeUnit;
   nowMs: number;
+  canAccessPumping?: boolean;
   initialDateKey?: string | null;
   onEditEvent: (event: TrackingEvent) => void;
 }
@@ -58,6 +60,7 @@ export function TimelineView({
   userId,
   volumeUnit,
   nowMs,
+  canAccessPumping = true,
   initialDateKey = null,
   onEditEvent,
 }: TimelineViewProps) {
@@ -79,6 +82,15 @@ export function TimelineView({
   const [filter, setFilter] = useState<TimelineFilter>('all');
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!canAccessPumping && filter === 'pumping') {
+      setFilter('all');
+    }
+  }, [canAccessPumping, filter]);
+
+  const activeFilter: TimelineFilter =
+    !canAccessPumping && filter === 'pumping' ? 'all' : filter;
+
   async function handleDeleteEvent(eventId: string) {
     setDeleteError(null);
     try {
@@ -97,6 +109,7 @@ export function TimelineView({
     timeZone,
     nowMs,
   )
+    .filter((e) => canAccessPumping || e.type !== 'pumping')
     .slice()
     .sort(
       (a, b) =>
@@ -104,30 +117,34 @@ export function TimelineView({
         Date.parse(b.createdAt) - Date.parse(a.createdAt),
     );
   const filtered = dayEvents.filter((e) => {
-    if (filter === 'all') return true;
-    if (filter === 'feeds') {
+    if (activeFilter === 'all') return true;
+    if (activeFilter === 'feeds') {
       return e.type === 'breast_feed' || e.type === 'bottle_feed';
     }
-    if (filter === 'sleep') return e.type === 'sleep';
-    if (filter === 'diaper') return e.type === 'diaper';
-    if (filter === 'spit_up') return e.type === 'spit_up';
-    if (filter === 'pumping') return e.type === 'pumping';
-    if (filter === 'tummy_time') return e.type === 'tummy_time';
+    if (activeFilter === 'sleep') return e.type === 'sleep';
+    if (activeFilter === 'diaper') return e.type === 'diaper';
+    if (activeFilter === 'spit_up') return e.type === 'spit_up';
+    if (activeFilter === 'pumping') return canAccessPumping && e.type === 'pumping';
+    if (activeFilter === 'tummy_time') return e.type === 'tummy_time';
     return e.type === 'vitamin';
   });
 
   const visibleSummaryCategories: readonly SummaryCardCategory[] =
-    filter === 'all'
-      ? ALL_SUMMARY_CATEGORIES
-      : filter === 'feeds'
+    activeFilter === 'all'
+      ? canAccessPumping
+        ? ALL_SUMMARY_CATEGORIES
+        : NON_PARENT_SUMMARY_CATEGORIES
+      : activeFilter === 'feeds'
         ? ['feeding']
-        : filter === 'sleep'
+        : activeFilter === 'sleep'
           ? ['sleep']
-          : filter === 'diaper' || filter === 'spit_up'
+          : activeFilter === 'diaper' || activeFilter === 'spit_up'
             ? ['diapers']
-            : filter === 'pumping'
-              ? ['pumping']
-              : filter === 'tummy_time'
+            : activeFilter === 'pumping'
+              ? canAccessPumping
+                ? ['pumping']
+                : []
+              : activeFilter === 'tummy_time'
                 ? ['tummy_time']
                 : [];
 
@@ -370,7 +387,9 @@ export function TimelineView({
           className={`grid gap-3 ${
             visibleSummaryCategories.length === 1
               ? 'grid-cols-1'
-              : 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'
+              : visibleSummaryCategories.length === 4
+                ? 'grid-cols-2 sm:grid-cols-2 lg:grid-cols-4'
+                : 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'
           }`}
         >
           <DailySummaryCards
@@ -393,17 +412,19 @@ export function TimelineView({
             { id: 'diaper', label: t('timeline.filter.diaper') },
             { id: 'spit_up', label: t('timeline.filter.spit_up') },
             { id: 'vitamin', label: t('timeline.filter.vitamin') },
-            { id: 'pumping', label: t('timeline.filter.pumping') },
+            ...(canAccessPumping
+              ? [{ id: 'pumping', label: t('timeline.filter.pumping') } as const]
+              : []),
             { id: 'tummy_time', label: t('timeline.filter.tummy_time') },
           ] as const
         ).map((tab) => (
           <button
             key={tab.id}
             type="button"
-            aria-pressed={filter === tab.id}
+            aria-pressed={activeFilter === tab.id}
             onClick={() => setFilter(tab.id)}
             className={`bt-focus-ring min-h-[44px] rounded-xl px-3.5 text-sm font-medium transition ${
-              filter === tab.id
+              activeFilter === tab.id
                 ? 'bg-slate-900 text-white dark:bg-teal-600'
                 : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300'
             }`}

@@ -5,12 +5,16 @@ import {
   CreateInviteResponseSchema,
   HealthzResponseSchema,
   ListMembersResponseSchema,
+  UpdateMemberRoleInputSchema,
+  UpdateMemberRoleResponseSchema,
   type AcceptInviteInput,
   type AcceptInviteResponse,
   type CreateInviteInput,
   type CreateInviteResponse,
   type HealthzResponse,
   type ListMembersResponse,
+  type UpdateMemberRoleInput,
+  type UpdateMemberRoleResponse,
 } from '@baby-tracker/shared';
 import { z } from 'zod';
 
@@ -126,6 +130,22 @@ export async function removeBabyMember(
     `/api/babies/${encodeURIComponent(babyId)}/members/${encodeURIComponent(userId)}`,
     { method: 'DELETE' },
     z.object({ ok: z.literal(true) }),
+  );
+}
+
+export async function updateBabyMemberRole(
+  babyId: string,
+  userId: string,
+  input: UpdateMemberRoleInput,
+): Promise<UpdateMemberRoleResponse> {
+  const body = UpdateMemberRoleInputSchema.parse(input);
+  return apiFetch(
+    `/api/babies/${encodeURIComponent(babyId)}/members/${encodeURIComponent(userId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    },
+    UpdateMemberRoleResponseSchema,
   );
 }
 

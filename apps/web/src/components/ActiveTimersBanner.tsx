@@ -32,6 +32,7 @@ interface ActiveTimersBannerProps {
   userId: string;
   timers: ActiveTimersForBaby;
   nowMs: number;
+  canAccessPumping?: boolean;
   onFinishBottle: (event: BottleFeedEvent) => void;
   onFinishPumping: (event: PumpingEvent) => void;
 }
@@ -41,6 +42,7 @@ export function ActiveTimersBanner({
   userId,
   timers,
   nowMs,
+  canAccessPumping = true,
   onFinishBottle,
   onFinishPumping,
 }: ActiveTimersBannerProps) {
@@ -58,7 +60,8 @@ export function ActiveTimersBanner({
   }
 
   const { breastFeed, bottleFeed, sleep, pumping, tummyTime } = timers;
-  if (!breastFeed && !bottleFeed && !sleep && !pumping && !tummyTime) {
+  const visiblePumping = canAccessPumping ? pumping : null;
+  if (!breastFeed && !bottleFeed && !sleep && !visiblePumping && !tummyTime) {
     return null;
   }
 
@@ -252,8 +255,11 @@ export function ActiveTimersBanner({
           );
         })()}
 
-        {pumping && (() => {
-          const secs = Math.max(0, (nowMs - Date.parse(pumping.startedAt)) / 1000);
+        {visiblePumping && (() => {
+          const secs = Math.max(
+            0,
+            (nowMs - Date.parse(visiblePumping.startedAt)) / 1000,
+          );
           return (
             <div className="bt-card bt-card-pumping flex flex-1 min-w-[240px] items-center justify-between gap-2 px-3 py-2">
               <div className="flex items-center gap-2">
@@ -273,7 +279,7 @@ export function ActiveTimersBanner({
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => onFinishPumping(pumping)}
+                  onClick={() => onFinishPumping(visiblePumping)}
                   className="bt-focus-ring inline-flex min-h-[44px] items-center gap-1 rounded-lg bg-purple-600 px-3 text-xs font-semibold text-white hover:bg-purple-700 disabled:opacity-60"
                 >
                   <Check className="h-3.5 w-3.5" />
@@ -283,7 +289,9 @@ export function ActiveTimersBanner({
                   type="button"
                   disabled={busy}
                   onClick={() =>
-                    void runTimerAction(() => deleteEvent(pumping.id, userId))
+                    void runTimerAction(() =>
+                      deleteEvent(visiblePumping.id, userId),
+                    )
                   }
                   aria-label={t('timers.discardPumpingAria')}
                   className="bt-focus-ring inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-rose-600 hover:bg-rose-50 disabled:opacity-60 dark:text-rose-400 dark:hover:bg-rose-950/60"

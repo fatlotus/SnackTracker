@@ -49,7 +49,11 @@ import {
 } from '../lib/store.js';
 import type { BottleFeedEvent, DiaperEvent } from '@baby-tracker/shared';
 import { useI18n } from '../lib/i18n.js';
-import { DailySummaryCards } from './DailySummaryCards.js';
+import {
+  ALL_SUMMARY_CATEGORIES,
+  DailySummaryCards,
+  NON_PARENT_SUMMARY_CATEGORIES,
+} from './DailySummaryCards.js';
 import {
   formatClock,
   getLocalTimeZone,
@@ -78,6 +82,7 @@ interface DashboardViewProps {
   timers: ActiveTimersForBaby;
   nowMs: number;
   volumeUnit: VolumeUnit;
+  canAccessPumping?: boolean;
   onOpenModal: (req: ModalRequest) => void;
   onDiaperQuickLogged: (event: DiaperEvent) => void;
   onViewTimeline: (dateKey?: string) => void;
@@ -91,6 +96,7 @@ export function DashboardView({
   timers,
   nowMs,
   volumeUnit,
+  canAccessPumping = true,
   onOpenModal,
   onDiaperQuickLogged,
   onViewTimeline,
@@ -793,6 +799,7 @@ export function DashboardView({
         </section>
 
         {/* Pumping Card */}
+        {canAccessPumping && (
         <section
           aria-label={t('dashboard.pumping')}
           className="bt-card bt-card-pumping p-4"
@@ -918,6 +925,7 @@ export function DashboardView({
             </button>
           )}
         </section>
+        )}
 
         {/* Tummy Time Card */}
         <section
@@ -1107,6 +1115,11 @@ export function DashboardView({
             stats={summaryStats}
             volumeUnit={volumeUnit}
             isToday={isSummaryToday}
+            categories={
+              canAccessPumping
+                ? ALL_SUMMARY_CATEGORIES
+                : NON_PARENT_SUMMARY_CATEGORIES
+            }
           />
         </div>
       </section>

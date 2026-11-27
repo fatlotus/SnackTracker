@@ -1,13 +1,21 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Baby, TrackingEvent } from '@baby-tracker/shared';
+import type { Baby, BabyMember, TrackingEvent } from '@baby-tracker/shared';
 import { closeDb, DB_NAME, getDb } from './db.js';
-import { createBaby, logDiaper } from './store.js';
+import {
+  createBaby,
+  getActiveTimersForBaby,
+  listEventsForBaby,
+  logDiaper,
+  logPumping,
+  startPumping,
+} from './store.js';
 import {
   computeBackoffDelayMs,
   LAST_SYNC_SEQ_META_KEY,
   resetSyncStateForTest,
   startSyncLoop,
+  SYNC_PUSH_BATCH_SIZE,
   syncOnce,
 } from './sync.js';
 
@@ -365,5 +373,151 @@ describe('sync engine', () => {
 
     const status = await syncOnce();
     expect(status.state).toBe('offline');
+  });
+
+  it('purges locally cached pumping events and active pumping timers when user is downgraded to non-parent', async () => {
+    const baby = await createBaby({
+      name: 'Ansel',
+      dob: '2026-04-01',
+      createdByUserId: USER_ID,
+    });
+    const diaper = await logDiaper({
+      babyId: baby.id,
+      kind: 'wet',
+      userId: USER_ID,
+    });
+    await logPumping({
+      babyId: baby.id,
+      userId: USER_ID,
+      startedAt: '2026-04-02T09:00:00.000Z',
+      endedAt: '2026-04-02T09:15:00.000Z',
+      volumeMl: 110,
+      side: 'both',
+    });
+    await startPumping({
+      babyId: baby.id,
+      userId: USER_ID,
+      startedAt: '2026-04-02T10:00:00.000Z',
+    });
+
+    const db = await getDb();
+    await db.put('sync_meta', {
+      key: 'current_user',
+      value: {
+        id: USER_ID,
+        email: 'caregiver@example.com',
+        displayName: 'Caregiver',
+        createdAt: '2026-04-01T00:00:00.000Z',
+      },
+    });
+    // Clear outbox so pull isn't deferred
+    await db.clear('outbox');
+
+    const downgradedMember: BabyMember = {
+      id: '33333333-3333-4333-8333-333333333333',
+      babyId: baby.id,
+      userId: USER_ID,
+      displayName: 'Caregiver',
+      role: 'caregiver',
+      joinedAt: '2026-04-01T00:00:00.000Z',
+      updatedAt: '2026-04-02T10:05:00.000Z',
+      deletedAt: null,
+      serverSeq: 10,
+    };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/sync/pull')) {
+        return new Response(
+          JSON.stringify({
+            babies: [],
+            members: [downgradedMember],
+            events: [],
+            latestSeq: 10,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const status = await syncOnce();
+    expect(status.state).toBe('idle');
+
+    const remainingEvents = await listEventsForBaby(baby.id);
+    expect(remainingEvents.some((e) => e.type === 'pumping')).toBe(false);
+    expect(remainingEvents.some((e) => e.id === diaper.id)).toBe(true);
+    expect((await getActiveTimersForBaby(baby.id)).pumping).toBeNull();
+  });
+
+  it('chunks outbox mutations across sequential /api/sync/push requests of SYNC_PUSH_BATCH_SIZE', async () => {
+    const baby = await createBaby({
+      name: 'Bulk Baby',
+      dob: '2026-04-01',
+      createdByUserId: USER_ID,
+    });
+
+    const db = await getDb();
+    await db.clear('outbox');
+
+    const totalMutations = SYNC_PUSH_BATCH_SIZE * 2 + 15; // 215 -> 3 batches (100, 100, 15)
+    const tx = db.transaction('outbox', 'readwrite');
+    for (let i = 0; i < totalMutations; i += 1) {
+      const ts = new Date(Date.UTC(2026, 3, 1, 0, 0, i)).toISOString();
+      const id = `00000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`;
+      await tx.objectStore('outbox').put({
+        mutationId: id,
+        entityType: 'event',
+        entityId: id,
+        op: 'upsert',
+        data: { id, babyId: baby.id },
+        clientUpdatedAt: ts,
+        createdAt: ts,
+        attempts: 0,
+        lastError: null,
+      });
+    }
+    await tx.done;
+
+    const pushBatchSizes: number[] = [];
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/api/sync/push') {
+          const body = JSON.parse(String(init?.body ?? '{}')) as {
+            mutations: { mutationId: string }[];
+          };
+          pushBatchSizes.push(body.mutations.length);
+          return new Response(
+            JSON.stringify({
+              ackedMutationIds: body.mutations.map((m) => m.mutationId),
+              rejected: [],
+              latestSeq: pushBatchSizes.length,
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        if (url.startsWith('/api/sync/pull')) {
+          return new Response(
+            JSON.stringify({
+              babies: [],
+              members: [],
+              events: [],
+              latestSeq: pushBatchSizes.length,
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        throw new Error(`Unexpected URL: ${url}`);
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const status = await syncOnce();
+    expect(status.state).toBe('idle');
+    expect(status.pendingCount).toBe(0);
+    expect(pushBatchSizes).toEqual([100, 100, 15]);
+    expect(await db.count('outbox')).toBe(0);
   });
 });

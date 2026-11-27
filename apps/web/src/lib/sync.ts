@@ -1,4 +1,5 @@
 import {
+  canAccessPumping,
   SyncPullResponseSchema,
   SyncPushResponseSchema,
 } from '@baby-tracker/shared';
@@ -7,6 +8,8 @@ import { getDb, nowIso } from './db.js';
 import { notifyStoreChange, subscribeStore } from './store.js';
 
 export const LAST_SYNC_SEQ_META_KEY = 'last_sync_seq';
+const CURRENT_USER_META_KEY = 'current_user';
+export const SYNC_PUSH_BATCH_SIZE = 100;
 export const DEFAULT_POLL_INTERVAL_MS = 12_000;
 export const DEFAULT_BASE_BACKOFF_MS = 1_000;
 export const DEFAULT_MAX_BACKOFF_MS = 60_000;
@@ -25,6 +28,7 @@ export interface SyncOptions {
   pollIntervalMs?: number;
   baseBackoffMs?: number;
   maxBackoffMs?: number;
+  currentUserId?: string;
 }
 
 type SyncStatusListener = (status: SyncStatus) => void;
@@ -183,15 +187,20 @@ export async function syncOnce(options: SyncOptions = {}): Promise<SyncStatus> {
     });
 
     try {
-      // 1. Push outbox mutations in creation order
+      // 1. Push outbox mutations in creation order, chunked to avoid body-size limits
       const outboxItems = await db.getAllFromIndex('outbox', 'by-createdAt');
-      if (outboxItems.length > 0) {
+      for (
+        let offset = 0;
+        offset < outboxItems.length;
+        offset += SYNC_PUSH_BATCH_SIZE
+      ) {
+        const batch = outboxItems.slice(offset, offset + SYNC_PUSH_BATCH_SIZE);
         const pushRes = await apiFetch(
           '/api/sync/push',
           {
             method: 'POST',
             body: JSON.stringify({
-              mutations: outboxItems.map((item) => ({
+              mutations: batch.map((item) => ({
                 mutationId: item.mutationId,
                 entityType: item.entityType,
                 op: item.op,
@@ -264,13 +273,68 @@ export async function syncOnce(options: SyncOptions = {}): Promise<SyncStatus> {
         }
       }
 
-      for (const member of pullRes.members) {
-        await membersStore.put(member);
+      if (pullRes.members.length > 0) {
+        const existingMembers = await membersStore.getAll();
+        for (const member of pullRes.members) {
+          for (const existing of existingMembers) {
+            if (
+              existing.babyId === member.babyId &&
+              existing.userId === member.userId &&
+              existing.id !== member.id
+            ) {
+              await membersStore.delete(existing.id);
+            }
+          }
+          await membersStore.put(member);
+        }
       }
 
       for (const event of pullRes.events) {
         if (!pendingEntityIds.has(event.id)) {
           await eventsStore.put(event);
+        }
+      }
+
+      // Purge cached pumping events (including active pumping timers) for any
+      // baby where the signed-in user's role does not allow pumping access.
+      let signedInUserId = options.currentUserId ?? null;
+      if (!signedInUserId) {
+        const currentUserMeta = await metaStore.get(CURRENT_USER_META_KEY);
+        if (
+          currentUserMeta &&
+          typeof currentUserMeta.value === 'object' &&
+          currentUserMeta.value !== null &&
+          'id' in currentUserMeta.value &&
+          typeof (currentUserMeta.value as { id?: unknown }).id === 'string'
+        ) {
+          signedInUserId = (currentUserMeta.value as { id: string }).id;
+        }
+      }
+
+      if (signedInUserId) {
+        const allMembers = await membersStore.getAll();
+        const restrictedBabyIds = new Set<string>();
+        const parentBabyIds = new Set<string>();
+
+        for (const m of allMembers) {
+          if (m.userId !== signedInUserId) continue;
+          if (!m.deletedAt && canAccessPumping(m.role)) {
+            parentBabyIds.add(m.babyId);
+          } else if (!m.deletedAt && !canAccessPumping(m.role)) {
+            restrictedBabyIds.add(m.babyId);
+          }
+        }
+
+        for (const babyId of restrictedBabyIds) {
+          if (parentBabyIds.has(babyId)) continue;
+          const babyEvents = await eventsStore
+            .index('by-babyId')
+            .getAll(babyId);
+          for (const ev of babyEvents) {
+            if (ev.type === 'pumping') {
+              await eventsStore.delete(ev.id);
+            }
+          }
         }
       }
 
