@@ -2,12 +2,21 @@ import crypto from 'node:crypto';
 import { Pool, type PoolClient } from 'pg';
 import {
   BabySchema,
+  ROLE_RANK,
   TrackingEventSchema,
+  canAccessPumping,
+  canAssignRole,
+  canEditEvents,
+  canInviteMembers,
+  canManageBaby,
+  canManageMember,
   isoDateTimeSchema,
+  normalizeBabyRole,
   uuidSchema,
   type Baby,
   type BabyInvitePublic,
   type BabyMember,
+  type BabyRole,
   type InviteRole,
   type SyncMutation,
   type SyncPullResponse,
@@ -21,6 +30,7 @@ import {
   type AcceptInviteResult,
   type RemoveMemberResult,
   type StorageAdapter,
+  type UpdateMemberRoleResult,
   type UserRecord,
 } from './types.js';
 
@@ -44,7 +54,7 @@ interface PgMemberRow {
   baby_id: string;
   user_id: string;
   display_name: string | null;
-  role: 'owner' | 'caregiver' | 'viewer';
+  role: string;
   joined_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -91,7 +101,7 @@ function mapMemberRow(row: PgMemberRow): BabyMember {
     babyId: row.baby_id,
     userId: row.user_id,
     displayName: row.display_name,
-    role: row.role,
+    role: normalizeBabyRole(row.role),
     joinedAt: row.joined_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
@@ -160,7 +170,7 @@ export class PostgresStorageAdapter implements StorageAdapter {
         baby_id TEXT NOT NULL REFERENCES babies(id),
         user_id TEXT NOT NULL REFERENCES users(id),
         display_name TEXT,
-        role TEXT NOT NULL CHECK (role IN ('owner', 'caregiver', 'viewer')),
+        role TEXT NOT NULL CHECK (role IN ('parent', 'caregiver', 'viewer')),
         joined_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         deleted_at TEXT,
@@ -172,7 +182,7 @@ export class PostgresStorageAdapter implements StorageAdapter {
         id TEXT PRIMARY KEY,
         baby_id TEXT NOT NULL REFERENCES babies(id),
         code TEXT NOT NULL UNIQUE,
-        role TEXT NOT NULL CHECK (role IN ('caregiver', 'viewer')),
+        role TEXT NOT NULL CHECK (role IN ('parent', 'caregiver', 'viewer')),
         created_by_user_id TEXT NOT NULL REFERENCES users(id),
         expires_at TEXT NOT NULL,
         created_at TEXT NOT NULL
@@ -215,6 +225,71 @@ export class PostgresStorageAdapter implements StorageAdapter {
 
       INSERT INTO sync_seq (id, val) VALUES (1, 0) ON CONFLICT (id) DO NOTHING;
     `);
+
+    await this.runInTransaction(async (client) => {
+      const memberChecks = await client.query<{
+        conname: string;
+        def: string;
+      }>(
+        `SELECT conname, pg_get_constraintdef(oid) AS def
+         FROM pg_constraint
+         WHERE conrelid = 'baby_members'::regclass AND contype = 'c'`,
+      );
+      const legacyMemberChecks = memberChecks.rows.filter(
+        (c) => c.def.includes('role') && !c.def.includes("'parent'"),
+      );
+      if (legacyMemberChecks.length > 0) {
+        for (const c of legacyMemberChecks) {
+          const safeName = c.conname.replace(/"/g, '""');
+          await client.query(
+            `ALTER TABLE baby_members DROP CONSTRAINT IF EXISTS "${safeName}"`,
+          );
+        }
+        const ownerRes = await client.query<{ id: string }>(
+          "SELECT id FROM baby_members WHERE role = 'owner'",
+        );
+        if (ownerRes.rows.length > 0) {
+          const seq = await this.nextSeq(client);
+          const now = new Date().toISOString();
+          await client.query(
+            `UPDATE baby_members
+             SET role = 'parent', updated_at = $1, server_seq = $2
+             WHERE role = 'owner'`,
+            [now, seq],
+          );
+        }
+        await client.query(
+          `ALTER TABLE baby_members
+           ADD CONSTRAINT baby_members_role_check
+           CHECK (role IN ('parent', 'caregiver', 'viewer'))`,
+        );
+      }
+
+      const inviteChecks = await client.query<{
+        conname: string;
+        def: string;
+      }>(
+        `SELECT conname, pg_get_constraintdef(oid) AS def
+         FROM pg_constraint
+         WHERE conrelid = 'baby_invites'::regclass AND contype = 'c'`,
+      );
+      const legacyInviteChecks = inviteChecks.rows.filter(
+        (c) => c.def.includes('role') && !c.def.includes("'parent'"),
+      );
+      if (legacyInviteChecks.length > 0) {
+        for (const c of legacyInviteChecks) {
+          const safeName = c.conname.replace(/"/g, '""');
+          await client.query(
+            `ALTER TABLE baby_invites DROP CONSTRAINT IF EXISTS "${safeName}"`,
+          );
+        }
+        await client.query(
+          `ALTER TABLE baby_invites
+           ADD CONSTRAINT baby_invites_role_check
+           CHECK (role IN ('parent', 'caregiver', 'viewer'))`,
+        );
+      }
+    });
   }
 
   async close(): Promise<void> {
@@ -416,9 +491,11 @@ export class PostgresStorageAdapter implements StorageAdapter {
 
       let memberRow: PgMemberRow;
       if (existingMember) {
+        const existingRole = normalizeBabyRole(existingMember.role);
         const nextRole =
-          existingMember.deleted_at === null && existingMember.role === 'owner'
-            ? 'owner'
+          existingMember.deleted_at === null &&
+          ROLE_RANK[existingRole] > ROLE_RANK[invite.role]
+            ? existingRole
             : invite.role;
         const updatedRes = await client.query<PgMemberRow>(
           `UPDATE baby_members
@@ -487,6 +564,69 @@ export class PostgresStorageAdapter implements StorageAdapter {
     return res.rows.map(mapMemberRow);
   }
 
+  async updateBabyMemberRole(input: {
+    babyId: string;
+    actorUserId: string;
+    targetUserId: string;
+    role: BabyRole;
+    now: string;
+  }): Promise<UpdateMemberRoleResult> {
+    return this.runInTransaction(async (client) => {
+      const actorRes = await client.query<PgMemberRow>(
+        `SELECT * FROM baby_members
+         WHERE baby_id = $1 AND user_id = $2 AND deleted_at IS NULL`,
+        [input.babyId, input.actorUserId],
+      );
+      const actor = actorRes.rows[0];
+      if (!actor) {
+        return { ok: false, error: 'FORBIDDEN' };
+      }
+
+      const actorRole = normalizeBabyRole(actor.role);
+      if (!canAssignRole(actorRole, input.role)) {
+        return { ok: false, error: 'FORBIDDEN' };
+      }
+
+      const targetRes = await client.query<PgMemberRow>(
+        `SELECT * FROM baby_members
+         WHERE baby_id = $1 AND user_id = $2 AND deleted_at IS NULL`,
+        [input.babyId, input.targetUserId],
+      );
+      const target = targetRes.rows[0];
+      if (!target) {
+        return { ok: false, error: 'NOT_FOUND' };
+      }
+
+      const targetRole = normalizeBabyRole(target.role);
+      if (!canManageMember(actorRole, targetRole)) {
+        return { ok: false, error: 'FORBIDDEN' };
+      }
+
+      if (targetRole === 'parent' && input.role !== 'parent') {
+        const parentRes = await client.query<{ id: string }>(
+          `SELECT id FROM baby_members
+           WHERE baby_id = $1 AND role = 'parent' AND deleted_at IS NULL
+           FOR UPDATE`,
+          [input.babyId],
+        );
+        if (parentRes.rows.length <= 1) {
+          return { ok: false, error: 'LAST_PARENT' };
+        }
+      }
+
+      const seq = await this.nextSeq(client);
+      const updatedRes = await client.query<PgMemberRow>(
+        `UPDATE baby_members
+         SET role = $1, updated_at = $2, server_seq = $3
+         WHERE id = $4
+         RETURNING *`,
+        [input.role, input.now, seq, target.id],
+      );
+
+      return { ok: true, member: mapMemberRow(updatedRes.rows[0]!) };
+    });
+  }
+
   async removeBabyMember(input: {
     babyId: string;
     targetUserId: string;
@@ -504,8 +644,9 @@ export class PostgresStorageAdapter implements StorageAdapter {
         return { ok: false, error: 'FORBIDDEN' };
       }
 
+      const actorRole = normalizeBabyRole(actor.role);
       const isSelf = input.actorUserId === input.targetUserId;
-      if (!isSelf && actor.role !== 'owner') {
+      if (!isSelf && !canInviteMembers(actorRole)) {
         return { ok: false, error: 'FORBIDDEN' };
       }
 
@@ -519,15 +660,20 @@ export class PostgresStorageAdapter implements StorageAdapter {
         return { ok: false, error: 'NOT_FOUND' };
       }
 
-      if (target.role === 'owner') {
-        const countRes = await client.query<{ cnt: string }>(
-          `SELECT COUNT(*) as cnt FROM baby_members
-           WHERE baby_id = $1 AND role = 'owner' AND deleted_at IS NULL`,
+      const targetRole = normalizeBabyRole(target.role);
+      if (!isSelf && !canManageMember(actorRole, targetRole)) {
+        return { ok: false, error: 'FORBIDDEN' };
+      }
+
+      if (targetRole === 'parent') {
+        const parentRes = await client.query<{ id: string }>(
+          `SELECT id FROM baby_members
+           WHERE baby_id = $1 AND role = 'parent' AND deleted_at IS NULL
+           FOR UPDATE`,
           [input.babyId],
         );
-        const ownerCount = Number(countRes.rows[0]?.cnt ?? 0);
-        if (ownerCount <= 1) {
-          return { ok: false, error: 'LAST_OWNER' };
+        if (parentRes.rows.length <= 1) {
+          return { ok: false, error: 'LAST_PARENT' };
         }
       }
 
@@ -540,6 +686,31 @@ export class PostgresStorageAdapter implements StorageAdapter {
       );
 
       return { ok: true };
+    });
+  }
+
+  async promoteUserMembershipsToParent(input: {
+    userId: string;
+    now: string;
+  }): Promise<number> {
+    return this.runInTransaction(async (client) => {
+      const res = await client.query<{ id: string }>(
+        `SELECT id FROM baby_members
+         WHERE user_id = $1 AND deleted_at IS NULL AND role != 'parent'`,
+        [input.userId],
+      );
+      if (res.rows.length === 0) return 0;
+
+      for (const row of res.rows) {
+        const seq = await this.nextSeq(client);
+        await client.query(
+          `UPDATE baby_members
+           SET role = 'parent', updated_at = $1, server_seq = $2
+           WHERE id = $3`,
+          [input.now, seq, row.id],
+        );
+      }
+      return res.rows.length;
     });
   }
 
@@ -646,7 +817,7 @@ export class PostgresStorageAdapter implements StorageAdapter {
               await client.query(
                 `INSERT INTO baby_members (
                   id, baby_id, user_id, display_name, role, joined_at, updated_at, deleted_at, server_seq
-                ) VALUES ($1, $2, $3, $4, 'owner', $5, $6, NULL, $7)`,
+                ) VALUES ($1, $2, $3, $4, 'parent', $5, $6, NULL, $7)`,
                 [
                   crypto.randomUUID(),
                   baby.id,
@@ -666,9 +837,9 @@ export class PostgresStorageAdapter implements StorageAdapter {
                 [baby.id, input.userId],
               );
               const member = memberRes.rows[0];
-              if (!member || member.role !== 'owner') {
+              if (!member || !canManageBaby(normalizeBabyRole(member.role))) {
                 await recordReject(
-                  'Forbidden: owner role required to modify baby',
+                  'Forbidden: parent role required to modify baby',
                 );
                 continue;
               }
@@ -723,8 +894,8 @@ export class PostgresStorageAdapter implements StorageAdapter {
               [babyId, input.userId],
             );
             const member = memberRes.rows[0];
-            if (!member || member.role !== 'owner') {
-              await recordReject('Forbidden: owner role required to delete baby');
+            if (!member || !canManageBaby(normalizeBabyRole(member.role))) {
+              await recordReject('Forbidden: parent role required to delete baby');
               continue;
             }
 
@@ -770,9 +941,16 @@ export class PostgresStorageAdapter implements StorageAdapter {
               await recordReject('Forbidden: not an active member of this baby');
               continue;
             }
-            if (member.role === 'viewer') {
+            const memberRole = normalizeBabyRole(member.role);
+            if (!canEditEvents(memberRole)) {
               await recordReject(
                 'Forbidden: viewer role cannot mutate events',
+              );
+              continue;
+            }
+            if (evt.type === 'pumping' && !canAccessPumping(memberRole)) {
+              await recordReject(
+                'Forbidden: parent role required to mutate pumping events',
               );
               continue;
             }
@@ -797,6 +975,15 @@ export class PostgresStorageAdapter implements StorageAdapter {
               if (existingEvt.baby_id !== evt.babyId) {
                 await recordReject(
                   'Forbidden: cannot move event to another baby',
+                );
+                continue;
+              }
+              if (
+                existingEvt.type === 'pumping' &&
+                !canAccessPumping(memberRole)
+              ) {
+                await recordReject(
+                  'Forbidden: parent role required to mutate pumping events',
                 );
                 continue;
               }
@@ -878,8 +1065,17 @@ export class PostgresStorageAdapter implements StorageAdapter {
                   [evt.babyId, input.userId],
                 );
                 const member = memberRes.rows[0];
-                if (!member || member.role === 'viewer') {
+                if (!member || !canEditEvents(normalizeBabyRole(member.role))) {
                   await recordReject('Forbidden: cannot delete event');
+                  continue;
+                }
+                if (
+                  evt.type === 'pumping' &&
+                  !canAccessPumping(normalizeBabyRole(member.role))
+                ) {
+                  await recordReject(
+                    'Forbidden: parent role required to delete pumping events',
+                  );
                   continue;
                 }
                 const babyRes = await client.query<{
@@ -928,8 +1124,17 @@ export class PostgresStorageAdapter implements StorageAdapter {
               [existingEvt.baby_id, input.userId],
             );
             const member = memberRes.rows[0];
-            if (!member || member.role === 'viewer') {
+            if (!member || !canEditEvents(normalizeBabyRole(member.role))) {
               await recordReject('Forbidden: cannot delete event');
+              continue;
+            }
+            if (
+              existingEvt.type === 'pumping' &&
+              !canAccessPumping(normalizeBabyRole(member.role))
+            ) {
+              await recordReject(
+                'Forbidden: parent role required to delete pumping events',
+              );
               continue;
             }
 
@@ -987,6 +1192,7 @@ export class PostgresStorageAdapter implements StorageAdapter {
     );
 
     const activeBabyIds: string[] = [];
+    const activeRoleByBabyId = new Map<string, BabyRole>();
     const newlyJoinedBabyIds = new Set<string>();
     const removedMemberships: BabyMember[] = [];
 
@@ -994,6 +1200,7 @@ export class PostgresStorageAdapter implements StorageAdapter {
       const seq = Number(m.server_seq);
       if (m.deleted_at === null) {
         activeBabyIds.push(m.baby_id);
+        activeRoleByBabyId.set(m.baby_id, normalizeBabyRole(m.role));
         if (seq > input.sinceSeq) {
           newlyJoinedBabyIds.add(m.baby_id);
         }
@@ -1008,6 +1215,9 @@ export class PostgresStorageAdapter implements StorageAdapter {
 
     for (const babyId of activeBabyIds) {
       const isNew = newlyJoinedBabyIds.has(babyId);
+      const allowPumping = canAccessPumping(
+        activeRoleByBabyId.get(babyId) ?? 'viewer',
+      );
 
       const babyRes = isNew
         ? await this.pool.query<PgBabyRow>(
@@ -1045,6 +1255,9 @@ export class PostgresStorageAdapter implements StorageAdapter {
             [babyId, input.sinceSeq],
           );
       for (const e of eventRes.rows) {
+        if (e.type === 'pumping' && !allowPumping) {
+          continue;
+        }
         events.push(mapEventRow(e));
       }
     }

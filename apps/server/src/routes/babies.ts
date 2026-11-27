@@ -2,6 +2,9 @@ import crypto from 'node:crypto';
 import {
   AcceptInviteInputSchema,
   CreateInviteInputSchema,
+  UpdateMemberRoleInputSchema,
+  canAssignRole,
+  canInviteMembers,
   uuidSchema,
 } from '@baby-tracker/shared';
 import type { FastifyInstance } from 'fastify';
@@ -32,10 +35,16 @@ export function registerBabyRoutes(
     }
 
     const membership = await storage.getActiveMembership(babyId, user.id);
-    if (!membership || membership.role !== 'owner') {
+    if (!membership || !canInviteMembers(membership.role)) {
       return reply
         .code(403)
-        .send({ error: 'Only baby owners can create invites' });
+        .send({ error: 'Forbidden: insufficient role to create invites' });
+    }
+
+    if (!canAssignRole(membership.role, parsed.data.role)) {
+      return reply
+        .code(403)
+        .send({ error: 'Forbidden: cannot invite a role higher than your own' });
     }
 
     const nowMs = Date.now();
@@ -109,6 +118,53 @@ export function registerBabyRoutes(
     return reply.code(200).send({ members });
   });
 
+  app.patch('/api/babies/:babyId/members/:userId', async (request, reply) => {
+    const user = await authenticateRequest(request, reply, storage, config);
+    if (!user) return;
+
+    const { babyId, userId: targetUserId } = request.params as {
+      babyId: string;
+      userId: string;
+    };
+    if (
+      !uuidSchema.safeParse(babyId).success ||
+      !uuidSchema.safeParse(targetUserId).success
+    ) {
+      return reply.code(400).send({ error: 'Invalid babyId or userId' });
+    }
+
+    const parsed = UpdateMemberRoleInputSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'Validation failed',
+        issues: parsed.error.issues,
+      });
+    }
+
+    const result = await storage.updateBabyMemberRole({
+      babyId,
+      actorUserId: user.id,
+      targetUserId,
+      role: parsed.data.role,
+      now: new Date().toISOString(),
+    });
+
+    if (!result.ok) {
+      if (result.error === 'FORBIDDEN') {
+        return reply.code(403).send({ error: 'Forbidden' });
+      }
+      if (result.error === 'LAST_PARENT') {
+        return reply.code(409).send({
+          error: 'Cannot demote the last parent of a baby',
+          code: 'LAST_PARENT',
+        });
+      }
+      return reply.code(404).send({ error: 'Member not found' });
+    }
+
+    return reply.code(200).send({ member: result.member });
+  });
+
   app.delete('/api/babies/:babyId/members/:userId', async (request, reply) => {
     const user = await authenticateRequest(request, reply, storage, config);
     if (!user) return;
@@ -135,10 +191,11 @@ export function registerBabyRoutes(
       if (result.error === 'FORBIDDEN') {
         return reply.code(403).send({ error: 'Forbidden' });
       }
-      if (result.error === 'LAST_OWNER') {
-        return reply
-          .code(409)
-          .send({ error: 'Cannot remove the last owner of a baby' });
+      if (result.error === 'LAST_PARENT') {
+        return reply.code(409).send({
+          error: 'Cannot remove the last parent of a baby',
+          code: 'LAST_PARENT',
+        });
       }
       return reply.code(404).send({ error: 'Member not found' });
     }

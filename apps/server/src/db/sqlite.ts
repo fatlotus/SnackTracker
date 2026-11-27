@@ -4,12 +4,21 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
   BabySchema,
+  ROLE_RANK,
   TrackingEventSchema,
+  canAccessPumping,
+  canAssignRole,
+  canEditEvents,
+  canInviteMembers,
+  canManageBaby,
+  canManageMember,
   isoDateTimeSchema,
+  normalizeBabyRole,
   uuidSchema,
   type Baby,
   type BabyInvitePublic,
   type BabyMember,
+  type BabyRole,
   type InviteRole,
   type SyncMutation,
   type SyncPullResponse,
@@ -23,6 +32,7 @@ import {
   type AcceptInviteResult,
   type RemoveMemberResult,
   type StorageAdapter,
+  type UpdateMemberRoleResult,
   type UserRecord,
 } from './types.js';
 
@@ -46,7 +56,7 @@ interface SqliteMemberRow {
   baby_id: string;
   user_id: string;
   display_name: string | null;
-  role: 'owner' | 'caregiver' | 'viewer';
+  role: string;
   joined_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -93,7 +103,7 @@ function mapMemberRow(row: SqliteMemberRow): BabyMember {
     babyId: row.baby_id,
     userId: row.user_id,
     displayName: row.display_name,
-    role: row.role,
+    role: normalizeBabyRole(row.role),
     joinedAt: row.joined_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
@@ -182,7 +192,7 @@ export class SqliteStorageAdapter implements StorageAdapter {
         baby_id TEXT NOT NULL REFERENCES babies(id),
         user_id TEXT NOT NULL REFERENCES users(id),
         display_name TEXT,
-        role TEXT NOT NULL CHECK (role IN ('owner', 'caregiver', 'viewer')),
+        role TEXT NOT NULL CHECK (role IN ('parent', 'caregiver', 'viewer')),
         joined_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         deleted_at TEXT,
@@ -194,7 +204,7 @@ export class SqliteStorageAdapter implements StorageAdapter {
         id TEXT PRIMARY KEY,
         baby_id TEXT NOT NULL REFERENCES babies(id),
         code TEXT NOT NULL UNIQUE,
-        role TEXT NOT NULL CHECK (role IN ('caregiver', 'viewer')),
+        role TEXT NOT NULL CHECK (role IN ('parent', 'caregiver', 'viewer')),
         created_by_user_id TEXT NOT NULL REFERENCES users(id),
         expires_at TEXT NOT NULL,
         created_at TEXT NOT NULL
@@ -237,6 +247,126 @@ export class SqliteStorageAdapter implements StorageAdapter {
 
       INSERT OR IGNORE INTO sync_seq (id, val) VALUES (1, 0);
     `);
+
+    const membersMaster = db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'baby_members'",
+      )
+      .get() as { sql?: string } | undefined;
+    if (membersMaster?.sql && !membersMaster.sql.includes("'parent'")) {
+      db.exec('PRAGMA foreign_keys = OFF;');
+      try {
+        db.exec('BEGIN IMMEDIATE');
+        const ownerRows = db
+          .prepare("SELECT id FROM baby_members WHERE role = 'owner'")
+          .all() as Array<{ id: string }>;
+        const migratedSeq = ownerRows.length > 0 ? this.nextSeq(db) : null;
+        const migratedAt = new Date().toISOString();
+
+        db.exec(`
+          CREATE TABLE baby_members_new (
+            id TEXT PRIMARY KEY,
+            baby_id TEXT NOT NULL REFERENCES babies(id),
+            user_id TEXT NOT NULL REFERENCES users(id),
+            display_name TEXT,
+            role TEXT NOT NULL CHECK (role IN ('parent', 'caregiver', 'viewer')),
+            joined_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            deleted_at TEXT,
+            server_seq INTEGER NOT NULL,
+            UNIQUE(baby_id, user_id)
+          );
+        `);
+
+        if (migratedSeq !== null) {
+          db.prepare(
+            `INSERT INTO baby_members_new (
+               id, baby_id, user_id, display_name, role, joined_at, updated_at, deleted_at, server_seq
+             )
+             SELECT
+               id,
+               baby_id,
+               user_id,
+               display_name,
+               CASE WHEN role = 'owner' THEN 'parent' ELSE role END,
+               joined_at,
+               CASE WHEN role = 'owner' THEN ? ELSE updated_at END,
+               deleted_at,
+               CASE WHEN role = 'owner' THEN ? ELSE server_seq END
+             FROM baby_members`,
+          ).run(migratedAt, migratedSeq);
+        } else {
+          db.exec(`
+            INSERT INTO baby_members_new (
+              id, baby_id, user_id, display_name, role, joined_at, updated_at, deleted_at, server_seq
+            )
+            SELECT
+              id, baby_id, user_id, display_name, role, joined_at, updated_at, deleted_at, server_seq
+            FROM baby_members;
+          `);
+        }
+
+        db.exec(`
+          DROP TABLE baby_members;
+          ALTER TABLE baby_members_new RENAME TO baby_members;
+          CREATE INDEX IF NOT EXISTS idx_members_user ON baby_members(user_id);
+          CREATE INDEX IF NOT EXISTS idx_members_baby_seq ON baby_members(baby_id, server_seq);
+        `);
+        db.exec('COMMIT');
+      } catch (err) {
+        try {
+          db.exec('ROLLBACK');
+        } catch {
+          // ignore rollback error
+        }
+        throw err;
+      } finally {
+        db.exec('PRAGMA foreign_keys = ON;');
+      }
+    }
+
+    const invitesMaster = db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'baby_invites'",
+      )
+      .get() as { sql?: string } | undefined;
+    if (invitesMaster?.sql && !invitesMaster.sql.includes("'parent'")) {
+      db.exec('PRAGMA foreign_keys = OFF;');
+      try {
+        db.exec('BEGIN IMMEDIATE');
+        db.exec(`
+          CREATE TABLE baby_invites_new (
+            id TEXT PRIMARY KEY,
+            baby_id TEXT NOT NULL REFERENCES babies(id),
+            code TEXT NOT NULL UNIQUE,
+            role TEXT NOT NULL CHECK (role IN ('parent', 'caregiver', 'viewer')),
+            created_by_user_id TEXT NOT NULL REFERENCES users(id),
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          );
+
+          INSERT INTO baby_invites_new (
+            id, baby_id, code, role, created_by_user_id, expires_at, created_at
+          )
+          SELECT
+            id, baby_id, code, role, created_by_user_id, expires_at, created_at
+          FROM baby_invites;
+
+          DROP TABLE baby_invites;
+          ALTER TABLE baby_invites_new RENAME TO baby_invites;
+        `);
+        db.exec('COMMIT');
+      } catch (err) {
+        try {
+          db.exec('ROLLBACK');
+        } catch {
+          // ignore rollback error
+        }
+        throw err;
+      } finally {
+        db.exec('PRAGMA foreign_keys = ON;');
+      }
+    }
 
     this.db = db;
   }
@@ -449,10 +579,12 @@ export class SqliteStorageAdapter implements StorageAdapter {
 
       let memberRow: SqliteMemberRow;
       if (existingMember) {
-        // Keep existing owner role if already an active owner; otherwise apply invite role
+        // Keep existing role if already an active member with a strictly higher role
+        const existingRole = normalizeBabyRole(existingMember.role);
         const nextRole =
-          existingMember.deleted_at === null && existingMember.role === 'owner'
-            ? 'owner'
+          existingMember.deleted_at === null &&
+          ROLE_RANK[existingRole] > ROLE_RANK[invite.role]
+            ? existingRole
             : invite.role;
         db.prepare(
           `UPDATE baby_members
@@ -522,6 +654,72 @@ export class SqliteStorageAdapter implements StorageAdapter {
     return rows.map(mapMemberRow);
   }
 
+  async updateBabyMemberRole(input: {
+    babyId: string;
+    actorUserId: string;
+    targetUserId: string;
+    role: BabyRole;
+    now: string;
+  }): Promise<UpdateMemberRoleResult> {
+    return this.runInTransaction((db) => {
+      const actor = db
+        .prepare(
+          `SELECT * FROM baby_members
+           WHERE baby_id = ? AND user_id = ? AND deleted_at IS NULL`,
+        )
+        .get(input.babyId, input.actorUserId) as SqliteMemberRow | undefined;
+
+      if (!actor) {
+        return { ok: false, error: 'FORBIDDEN' };
+      }
+      const actorRole = normalizeBabyRole(actor.role);
+      if (!canAssignRole(actorRole, input.role)) {
+        return { ok: false, error: 'FORBIDDEN' };
+      }
+
+      const target = db
+        .prepare(
+          `SELECT * FROM baby_members
+           WHERE baby_id = ? AND user_id = ? AND deleted_at IS NULL`,
+        )
+        .get(input.babyId, input.targetUserId) as SqliteMemberRow | undefined;
+
+      if (!target) {
+        return { ok: false, error: 'NOT_FOUND' };
+      }
+
+      const targetRole = normalizeBabyRole(target.role);
+      if (!canManageMember(actorRole, targetRole)) {
+        return { ok: false, error: 'FORBIDDEN' };
+      }
+
+      if (targetRole === 'parent' && input.role !== 'parent') {
+        const parentCountRow = db
+          .prepare(
+            `SELECT COUNT(*) as cnt FROM baby_members
+             WHERE baby_id = ? AND role = 'parent' AND deleted_at IS NULL`,
+          )
+          .get(input.babyId) as { cnt: number };
+        if (parentCountRow.cnt <= 1) {
+          return { ok: false, error: 'LAST_PARENT' };
+        }
+      }
+
+      const seq = this.nextSeq(db);
+      db.prepare(
+        `UPDATE baby_members
+         SET role = ?, updated_at = ?, server_seq = ?
+         WHERE id = ?`,
+      ).run(input.role, input.now, seq, target.id);
+
+      const updated = db
+        .prepare('SELECT * FROM baby_members WHERE id = ?')
+        .get(target.id) as unknown as SqliteMemberRow;
+
+      return { ok: true, member: mapMemberRow(updated) };
+    });
+  }
+
   async removeBabyMember(input: {
     babyId: string;
     targetUserId: string;
@@ -540,8 +738,9 @@ export class SqliteStorageAdapter implements StorageAdapter {
         return { ok: false, error: 'FORBIDDEN' };
       }
 
+      const actorRole = normalizeBabyRole(actor.role);
       const isSelf = input.actorUserId === input.targetUserId;
-      if (!isSelf && actor.role !== 'owner') {
+      if (!isSelf && !canInviteMembers(actorRole)) {
         return { ok: false, error: 'FORBIDDEN' };
       }
 
@@ -556,15 +755,20 @@ export class SqliteStorageAdapter implements StorageAdapter {
         return { ok: false, error: 'NOT_FOUND' };
       }
 
-      if (target.role === 'owner') {
-        const ownerCountRow = db
+      const targetRole = normalizeBabyRole(target.role);
+      if (!isSelf && !canManageMember(actorRole, targetRole)) {
+        return { ok: false, error: 'FORBIDDEN' };
+      }
+
+      if (targetRole === 'parent') {
+        const parentCountRow = db
           .prepare(
             `SELECT COUNT(*) as cnt FROM baby_members
-             WHERE baby_id = ? AND role = 'owner' AND deleted_at IS NULL`,
+             WHERE baby_id = ? AND role = 'parent' AND deleted_at IS NULL`,
           )
           .get(input.babyId) as { cnt: number };
-        if (ownerCountRow.cnt <= 1) {
-          return { ok: false, error: 'LAST_OWNER' };
+        if (parentCountRow.cnt <= 1) {
+          return { ok: false, error: 'LAST_PARENT' };
         }
       }
 
@@ -576,6 +780,33 @@ export class SqliteStorageAdapter implements StorageAdapter {
       ).run(input.now, input.now, seq, target.id);
 
       return { ok: true };
+    });
+  }
+
+  async promoteUserMembershipsToParent(input: {
+    userId: string;
+    now: string;
+  }): Promise<number> {
+    return this.runInTransaction((db) => {
+      const rows = db
+        .prepare(
+          `SELECT id FROM baby_members
+           WHERE user_id = ? AND deleted_at IS NULL AND role != 'parent'`,
+        )
+        .all(input.userId) as Array<{ id: string }>;
+
+      if (rows.length === 0) return 0;
+
+      const stmt = db.prepare(
+        `UPDATE baby_members
+         SET role = 'parent', updated_at = ?, server_seq = ?
+         WHERE id = ?`,
+      );
+      for (const row of rows) {
+        const seq = this.nextSeq(db);
+        stmt.run(input.now, seq, row.id);
+      }
+      return rows.length;
     });
   }
 
@@ -676,11 +907,11 @@ export class SqliteStorageAdapter implements StorageAdapter {
                 seq,
               );
 
-              // Auto-create owner membership
+              // Auto-create parent membership
               db.prepare(
                 `INSERT INTO baby_members (
                   id, baby_id, user_id, display_name, role, joined_at, updated_at, deleted_at, server_seq
-                ) VALUES (?, ?, ?, ?, 'owner', ?, ?, NULL, ?)`,
+                ) VALUES (?, ?, ?, ?, 'parent', ?, ?, NULL, ?)`,
               ).run(
                 crypto.randomUUID(),
                 baby.id,
@@ -700,8 +931,8 @@ export class SqliteStorageAdapter implements StorageAdapter {
                 )
                 .get(baby.id, input.userId) as { role: string } | undefined;
 
-              if (!member || member.role !== 'owner') {
-                recordReject('Forbidden: owner role required to modify baby');
+              if (!member || !canManageBaby(normalizeBabyRole(member.role))) {
+                recordReject('Forbidden: parent role required to modify baby');
                 continue;
               }
 
@@ -757,8 +988,8 @@ export class SqliteStorageAdapter implements StorageAdapter {
               )
               .get(babyId, input.userId) as { role: string } | undefined;
 
-            if (!member || member.role !== 'owner') {
-              recordReject('Forbidden: owner role required to delete baby');
+            if (!member || !canManageBaby(normalizeBabyRole(member.role))) {
+              recordReject('Forbidden: parent role required to delete baby');
               continue;
             }
 
@@ -803,8 +1034,13 @@ export class SqliteStorageAdapter implements StorageAdapter {
               recordReject('Forbidden: not an active member of this baby');
               continue;
             }
-            if (member.role === 'viewer') {
+            const memberRole = normalizeBabyRole(member.role);
+            if (!canEditEvents(memberRole)) {
               recordReject('Forbidden: viewer role cannot mutate events');
+              continue;
+            }
+            if (evt.type === 'pumping' && !canAccessPumping(memberRole)) {
+              recordReject('Forbidden: parent role required to mutate pumping events');
               continue;
             }
 
@@ -823,6 +1059,13 @@ export class SqliteStorageAdapter implements StorageAdapter {
             if (existingEvt) {
               if (existingEvt.baby_id !== evt.babyId) {
                 recordReject('Forbidden: cannot move event to another baby');
+                continue;
+              }
+              if (
+                existingEvt.type === 'pumping' &&
+                !canAccessPumping(memberRole)
+              ) {
+                recordReject('Forbidden: parent role required to mutate pumping events');
                 continue;
               }
               const existingUpdatedMs = Date.parse(existingEvt.updated_at);
@@ -901,8 +1144,15 @@ export class SqliteStorageAdapter implements StorageAdapter {
                      WHERE baby_id = ? AND user_id = ? AND deleted_at IS NULL`,
                   )
                   .get(evt.babyId, input.userId) as { role: string } | undefined;
-                if (!member || member.role === 'viewer') {
+                if (!member || !canEditEvents(normalizeBabyRole(member.role))) {
                   recordReject('Forbidden: cannot delete event');
+                  continue;
+                }
+                if (
+                  evt.type === 'pumping' &&
+                  !canAccessPumping(normalizeBabyRole(member.role))
+                ) {
+                  recordReject('Forbidden: parent role required to delete pumping events');
                   continue;
                 }
                 const babyRow = db
@@ -952,8 +1202,15 @@ export class SqliteStorageAdapter implements StorageAdapter {
               | { role: string }
               | undefined;
 
-            if (!member || member.role === 'viewer') {
+            if (!member || !canEditEvents(normalizeBabyRole(member.role))) {
               recordReject('Forbidden: cannot delete event');
+              continue;
+            }
+            if (
+              existingEvt.type === 'pumping' &&
+              !canAccessPumping(normalizeBabyRole(member.role))
+            ) {
+              recordReject('Forbidden: parent role required to delete pumping events');
               continue;
             }
 
@@ -1008,12 +1265,14 @@ export class SqliteStorageAdapter implements StorageAdapter {
       .all(input.userId) as unknown as SqliteMemberRow[];
 
     const activeBabyIds: string[] = [];
+    const activeRoleByBabyId = new Map<string, BabyRole>();
     const newlyJoinedBabyIds = new Set<string>();
     const removedMemberships: BabyMember[] = [];
 
     for (const m of myMemberships) {
       if (m.deleted_at === null) {
         activeBabyIds.push(m.baby_id);
+        activeRoleByBabyId.set(m.baby_id, normalizeBabyRole(m.role));
         if (m.server_seq > input.sinceSeq) {
           newlyJoinedBabyIds.add(m.baby_id);
         }
@@ -1028,6 +1287,9 @@ export class SqliteStorageAdapter implements StorageAdapter {
 
     for (const babyId of activeBabyIds) {
       const isNew = newlyJoinedBabyIds.has(babyId);
+      const allowPumping = canAccessPumping(
+        activeRoleByBabyId.get(babyId) ?? 'viewer',
+      );
 
       const babyRows = (
         isNew
@@ -1065,6 +1327,9 @@ export class SqliteStorageAdapter implements StorageAdapter {
               .all(babyId, input.sinceSeq)
       ) as unknown as SqliteEventRow[];
       for (const e of eventRows) {
+        if (e.type === 'pumping' && !allowPumping) {
+          continue;
+        }
         events.push(mapEventRow(e));
       }
     }

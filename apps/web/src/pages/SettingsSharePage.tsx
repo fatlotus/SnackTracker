@@ -263,7 +263,7 @@ export function SettingsSharePage({
 
   const formatRole = (role: string) => {
     if (locale === 'zh-CN') {
-      if (role === 'owner') return '创建者';
+      if (role === 'parent' || role === 'owner') return '家长';
       if (role === 'caregiver') return '照护者';
       if (role === 'viewer') return '查看者';
     }
@@ -568,7 +568,7 @@ export function SettingsSharePage({
                   {formatRole(m.role)}
                 </span>
               </div>
-              {m.role !== 'owner' && (
+              {m.role !== 'parent' && (
                 <button
                   type="button"
                   onClick={() => void handleRemoveMember(m.userId)}

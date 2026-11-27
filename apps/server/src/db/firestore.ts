@@ -2,12 +2,21 @@ import crypto from 'node:crypto';
 import { Firestore, type Transaction } from '@google-cloud/firestore';
 import {
   BabySchema,
+  ROLE_RANK,
   TrackingEventSchema,
+  canAccessPumping,
+  canAssignRole,
+  canEditEvents,
+  canInviteMembers,
+  canManageBaby,
+  canManageMember,
   isoDateTimeSchema,
+  normalizeBabyRole,
   uuidSchema,
   type Baby,
   type BabyInvitePublic,
   type BabyMember,
+  type BabyRole,
   type InviteRole,
   type SyncMutation,
   type SyncPullResponse,
@@ -21,6 +30,7 @@ import {
   type AcceptInviteResult,
   type RemoveMemberResult,
   type StorageAdapter,
+  type UpdateMemberRoleResult,
   type UserRecord,
 } from './types.js';
 
@@ -46,6 +56,13 @@ interface FirestoreInviteDoc {
   createdByUserId: string;
   expiresAt: string;
   createdAt: string;
+}
+
+function normalizeMemberDoc(raw: BabyMember): BabyMember {
+  return {
+    ...raw,
+    role: normalizeBabyRole(raw.role),
+  };
 }
 
 export class FirestoreStorageAdapter implements StorageAdapter {
@@ -88,6 +105,34 @@ export class FirestoreStorageAdapter implements StorageAdapter {
         tx.set(seqRef, { val: 0 });
       }
     });
+
+    // Idempotent legacy migration: convert role == 'owner' -> 'parent' (leave caregiver/viewer untouched)
+    const legacyOwnersSnap = await db
+      .collection('baby_members')
+      .where('role', '==', 'owner')
+      .get();
+    if (!legacyOwnersSnap.empty) {
+      const migratedAt = new Date().toISOString();
+      for (const docSnap of legacyOwnersSnap.docs) {
+        await db.runTransaction(async (tx) => {
+          const freshSnap = await tx.get(docSnap.ref);
+          if (!freshSnap.exists) return;
+          const data = freshSnap.data() as { role?: string } | undefined;
+          if (data?.role !== 'owner') return;
+          const currentSeq = await this.getCurrentSeq(db, tx);
+          const seq = this.allocateSeq(db, tx, currentSeq);
+          tx.set(
+            docSnap.ref,
+            {
+              role: 'parent',
+              updatedAt: migratedAt,
+              serverSeq: seq,
+            },
+            { merge: true },
+          );
+        });
+      }
+    }
 
     this.db = db;
   }
@@ -255,9 +300,11 @@ export class FirestoreStorageAdapter implements StorageAdapter {
       let member: BabyMember;
       if (existingMemberSnap.exists) {
         const existingMember = existingMemberSnap.data() as BabyMember;
+        const existingRole = normalizeBabyRole(existingMember.role);
         const nextRole =
-          existingMember.deletedAt === null && existingMember.role === 'owner'
-            ? 'owner'
+          existingMember.deletedAt === null &&
+          ROLE_RANK[existingRole] > ROLE_RANK[invite.role]
+            ? existingRole
             : invite.role;
         member = {
           ...existingMember,
@@ -305,7 +352,7 @@ export class FirestoreStorageAdapter implements StorageAdapter {
       .doc(this.memberDocId(babyId, userId))
       .get();
     if (!snap.exists) return null;
-    const member = snap.data() as BabyMember;
+    const member = normalizeMemberDoc(snap.data() as BabyMember);
     return member.deletedAt === null ? member : null;
   }
 
@@ -317,9 +364,80 @@ export class FirestoreStorageAdapter implements StorageAdapter {
       .get();
 
     return snap.docs
-      .map((d) => d.data() as BabyMember)
+      .map((d) => normalizeMemberDoc(d.data() as BabyMember))
       .filter((m) => m.deletedAt === null)
       .sort((a, b) => a.joinedAt.localeCompare(b.joinedAt));
+  }
+
+  async updateBabyMemberRole(input: {
+    babyId: string;
+    actorUserId: string;
+    targetUserId: string;
+    role: BabyRole;
+    now: string;
+  }): Promise<UpdateMemberRoleResult> {
+    const db = this.getDb();
+
+    return db.runTransaction(async (tx) => {
+      const actorRef = db
+        .collection('baby_members')
+        .doc(this.memberDocId(input.babyId, input.actorUserId));
+      const targetRef = db
+        .collection('baby_members')
+        .doc(this.memberDocId(input.babyId, input.targetUserId));
+      const babyMembersQuery = db
+        .collection('baby_members')
+        .where('babyId', '==', input.babyId);
+
+      const [actorSnap, targetSnap, allMembersSnap, currentSeq] =
+        await Promise.all([
+          tx.get(actorRef),
+          tx.get(targetRef),
+          tx.get(babyMembersQuery),
+          this.getCurrentSeq(db, tx),
+        ]);
+
+      const actor = actorSnap.exists
+        ? normalizeMemberDoc(actorSnap.data() as BabyMember)
+        : null;
+      if (!actor || actor.deletedAt !== null) {
+        return { ok: false, error: 'FORBIDDEN' };
+      }
+      if (!canAssignRole(actor.role, input.role)) {
+        return { ok: false, error: 'FORBIDDEN' };
+      }
+
+      const target = targetSnap.exists
+        ? normalizeMemberDoc(targetSnap.data() as BabyMember)
+        : null;
+      if (!target || target.deletedAt !== null) {
+        return { ok: false, error: 'NOT_FOUND' };
+      }
+
+      if (!canManageMember(actor.role, target.role)) {
+        return { ok: false, error: 'FORBIDDEN' };
+      }
+
+      if (target.role === 'parent' && input.role !== 'parent') {
+        const activeParents = allMembersSnap.docs
+          .map((d) => normalizeMemberDoc(d.data() as BabyMember))
+          .filter((m) => m.deletedAt === null && m.role === 'parent');
+        if (activeParents.length <= 1) {
+          return { ok: false, error: 'LAST_PARENT' };
+        }
+      }
+
+      const seq = this.allocateSeq(db, tx, currentSeq);
+      const updatedMember: BabyMember = {
+        ...target,
+        role: input.role,
+        updatedAt: input.now,
+        serverSeq: seq,
+      };
+      tx.set(targetRef, updatedMember, { merge: true });
+
+      return { ok: true, member: updatedMember };
+    });
   }
 
   async removeBabyMember(input: {
@@ -349,27 +467,35 @@ export class FirestoreStorageAdapter implements StorageAdapter {
           this.getCurrentSeq(db, tx),
         ]);
 
-      const actor = actorSnap.exists ? (actorSnap.data() as BabyMember) : null;
+      const actor = actorSnap.exists
+        ? normalizeMemberDoc(actorSnap.data() as BabyMember)
+        : null;
       if (!actor || actor.deletedAt !== null) {
         return { ok: false, error: 'FORBIDDEN' };
       }
 
       const isSelf = input.actorUserId === input.targetUserId;
-      if (!isSelf && actor.role !== 'owner') {
+      if (!isSelf && !canInviteMembers(actor.role)) {
         return { ok: false, error: 'FORBIDDEN' };
       }
 
-      const target = targetSnap.exists ? (targetSnap.data() as BabyMember) : null;
+      const target = targetSnap.exists
+        ? normalizeMemberDoc(targetSnap.data() as BabyMember)
+        : null;
       if (!target || target.deletedAt !== null) {
         return { ok: false, error: 'NOT_FOUND' };
       }
 
-      if (target.role === 'owner') {
-        const activeOwners = allMembersSnap.docs
-          .map((d) => d.data() as BabyMember)
-          .filter((m) => m.deletedAt === null && m.role === 'owner');
-        if (activeOwners.length <= 1) {
-          return { ok: false, error: 'LAST_OWNER' };
+      if (!isSelf && !canManageMember(actor.role, target.role)) {
+        return { ok: false, error: 'FORBIDDEN' };
+      }
+
+      if (target.role === 'parent') {
+        const activeParents = allMembersSnap.docs
+          .map((d) => normalizeMemberDoc(d.data() as BabyMember))
+          .filter((m) => m.deletedAt === null && m.role === 'parent');
+        if (activeParents.length <= 1) {
+          return { ok: false, error: 'LAST_PARENT' };
         }
       }
 
@@ -387,6 +513,43 @@ export class FirestoreStorageAdapter implements StorageAdapter {
 
       return { ok: true };
     });
+  }
+
+  async promoteUserMembershipsToParent(input: {
+    userId: string;
+    now: string;
+  }): Promise<number> {
+    const db = this.getDb();
+    const snap = await db
+      .collection('baby_members')
+      .where('userId', '==', input.userId)
+      .get();
+
+    let promoted = 0;
+    for (const docSnap of snap.docs) {
+      const didPromote = await db.runTransaction(async (tx) => {
+        const freshSnap = await tx.get(docSnap.ref);
+        if (!freshSnap.exists) return false;
+        const member = normalizeMemberDoc(freshSnap.data() as BabyMember);
+        if (member.deletedAt !== null || member.role === 'parent') {
+          return false;
+        }
+        const currentSeq = await this.getCurrentSeq(db, tx);
+        const seq = this.allocateSeq(db, tx, currentSeq);
+        tx.set(
+          docSnap.ref,
+          {
+            role: 'parent',
+            updatedAt: input.now,
+            serverSeq: seq,
+          },
+          { merge: true },
+        );
+        return true;
+      });
+      if (didPromote) promoted += 1;
+    }
+    return promoted;
   }
 
   async applySyncMutations(input: {
@@ -496,7 +659,7 @@ export class FirestoreStorageAdapter implements StorageAdapter {
                 babyId: baby.id,
                 userId: input.userId,
                 displayName: input.userDisplayName,
-                role: 'owner',
+                role: 'parent',
                 joinedAt: input.serverNowIso,
                 updatedAt: input.serverNowIso,
                 deletedAt: null,
@@ -507,10 +670,14 @@ export class FirestoreStorageAdapter implements StorageAdapter {
               recordAck(seq);
             } else {
               const member = memberSnap.exists
-                ? (memberSnap.data() as BabyMember)
+                ? normalizeMemberDoc(memberSnap.data() as BabyMember)
                 : null;
-              if (!member || member.deletedAt !== null || member.role !== 'owner') {
-                recordReject('Forbidden: owner role required to modify baby');
+              if (
+                !member ||
+                member.deletedAt !== null ||
+                !canManageBaby(member.role)
+              ) {
+                recordReject('Forbidden: parent role required to modify baby');
                 return;
               }
               const existingBaby = existingBabySnap.data() as Baby;
@@ -560,10 +727,14 @@ export class FirestoreStorageAdapter implements StorageAdapter {
               return;
             }
             const member = memberSnap.exists
-              ? (memberSnap.data() as BabyMember)
+              ? normalizeMemberDoc(memberSnap.data() as BabyMember)
               : null;
-            if (!member || member.deletedAt !== null || member.role !== 'owner') {
-              recordReject('Forbidden: owner role required to delete baby');
+            if (
+              !member ||
+              member.deletedAt !== null ||
+              !canManageBaby(member.role)
+            ) {
+              recordReject('Forbidden: parent role required to delete baby');
               return;
             }
 
@@ -619,19 +790,25 @@ export class FirestoreStorageAdapter implements StorageAdapter {
               ]);
 
             const member = memberSnap.exists
-              ? (memberSnap.data() as BabyMember)
+              ? normalizeMemberDoc(memberSnap.data() as BabyMember)
               : null;
             if (!member || member.deletedAt !== null) {
               recordReject('Forbidden: not an active member of this baby');
               return;
             }
-            if (member.role === 'viewer') {
+            if (!canEditEvents(member.role)) {
               recordReject('Forbidden: viewer role cannot mutate events');
+              return;
+            }
+            if (evt.type === 'pumping' && !canAccessPumping(member.role)) {
+              recordReject(
+                'Forbidden: parent role required to mutate pumping events',
+              );
               return;
             }
 
             const baby = babySnap.exists ? (babySnap.data() as Baby) : null;
-            if (!baby || baby.deletedAt !== null) {
+            if (!baby || baby.deletedAt != null) {
               recordReject('Forbidden: baby has been deleted');
               return;
             }
@@ -643,6 +820,15 @@ export class FirestoreStorageAdapter implements StorageAdapter {
             if (existingEvt) {
               if (existingEvt.babyId !== evt.babyId) {
                 recordReject('Forbidden: cannot move event to another baby');
+                return;
+              }
+              if (
+                existingEvt.type === 'pumping' &&
+                !canAccessPumping(member.role)
+              ) {
+                recordReject(
+                  'Forbidden: parent role required to mutate pumping events',
+                );
                 return;
               }
               const existingUpdatedMs = Date.parse(existingEvt.updatedAt);
@@ -712,14 +898,24 @@ export class FirestoreStorageAdapter implements StorageAdapter {
                 ]);
 
                 const member = memberSnap.exists
-                  ? (memberSnap.data() as BabyMember)
+                  ? normalizeMemberDoc(memberSnap.data() as BabyMember)
                   : null;
-                if (!member || member.deletedAt !== null || member.role === 'viewer') {
+                if (
+                  !member ||
+                  member.deletedAt !== null ||
+                  !canEditEvents(member.role)
+                ) {
                   recordReject('Forbidden: cannot delete event');
                   return;
                 }
+                if (evt.type === 'pumping' && !canAccessPumping(member.role)) {
+                  recordReject(
+                    'Forbidden: parent role required to delete pumping events',
+                  );
+                  return;
+                }
                 const baby = babySnap.exists ? (babySnap.data() as Baby) : null;
-                if (!baby || baby.deletedAt !== null) {
+                if (!baby || baby.deletedAt != null) {
                   recordReject('Forbidden: baby has been deleted');
                   return;
                 }
@@ -764,14 +960,27 @@ export class FirestoreStorageAdapter implements StorageAdapter {
             ]);
 
             const member = memberSnap.exists
-              ? (memberSnap.data() as BabyMember)
+              ? normalizeMemberDoc(memberSnap.data() as BabyMember)
               : null;
-            if (!member || member.deletedAt !== null || member.role === 'viewer') {
+            if (
+              !member ||
+              member.deletedAt !== null ||
+              !canEditEvents(member.role)
+            ) {
               recordReject('Forbidden: cannot delete event');
               return;
             }
+            if (
+              existingEvt.type === 'pumping' &&
+              !canAccessPumping(member.role)
+            ) {
+              recordReject(
+                'Forbidden: parent role required to delete pumping events',
+              );
+              return;
+            }
             const baby = babySnap.exists ? (babySnap.data() as Baby) : null;
-            if (!baby || baby.deletedAt !== null) {
+            if (!baby || baby.deletedAt != null) {
               recordReject('Forbidden: baby has been deleted');
               return;
             }
@@ -827,14 +1036,16 @@ export class FirestoreStorageAdapter implements StorageAdapter {
       .get();
 
     const activeBabyIds: string[] = [];
+    const activeRoleByBabyId = new Map<string, BabyRole>();
     const newlyJoinedBabyIds = new Set<string>();
     const removedMemberships: BabyMember[] = [];
 
     for (const doc of myMembershipsSnap.docs) {
-      const m = doc.data() as BabyMember;
+      const m = normalizeMemberDoc(doc.data() as BabyMember);
       const mSeq = m.serverSeq ?? 0;
       if (m.deletedAt === null) {
         activeBabyIds.push(m.babyId);
+        activeRoleByBabyId.set(m.babyId, m.role);
         if (mSeq > input.sinceSeq) {
           newlyJoinedBabyIds.add(m.babyId);
         }
@@ -849,6 +1060,9 @@ export class FirestoreStorageAdapter implements StorageAdapter {
 
     for (const babyId of activeBabyIds) {
       const isNew = newlyJoinedBabyIds.has(babyId);
+      const allowPumping = canAccessPumping(
+        activeRoleByBabyId.get(babyId) ?? 'viewer',
+      );
 
       const [babySnap, membersSnap, eventsSnap] = await Promise.all([
         db.collection('babies').doc(babyId).get(),
@@ -864,7 +1078,7 @@ export class FirestoreStorageAdapter implements StorageAdapter {
       }
 
       for (const d of membersSnap.docs) {
-        const m = d.data() as BabyMember;
+        const m = normalizeMemberDoc(d.data() as BabyMember);
         if (isNew || (m.serverSeq ?? 0) > input.sinceSeq) {
           members.push(m);
         }
@@ -872,6 +1086,9 @@ export class FirestoreStorageAdapter implements StorageAdapter {
 
       for (const d of eventsSnap.docs) {
         const e = d.data() as TrackingEvent;
+        if (e.type === 'pumping' && !allowPumping) {
+          continue;
+        }
         if (isNew || (e.serverSeq ?? 0) > input.sinceSeq) {
           events.push(e);
         }

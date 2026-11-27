@@ -2,6 +2,7 @@ import type {
   Baby,
   BabyInvitePublic,
   BabyMember,
+  BabyRole,
   InviteRole,
   SyncMutation,
   SyncPullResponse,
@@ -24,7 +25,11 @@ export type AcceptInviteResult =
 
 export type RemoveMemberResult =
   | { ok: true }
-  | { ok: false; error: 'FORBIDDEN' | 'NOT_FOUND' | 'LAST_OWNER' };
+  | { ok: false; error: 'FORBIDDEN' | 'NOT_FOUND' | 'LAST_PARENT' };
+
+export type UpdateMemberRoleResult =
+  | { ok: true; member: BabyMember }
+  | { ok: false; error: 'FORBIDDEN' | 'NOT_FOUND' | 'LAST_PARENT' };
 
 export class DuplicateEmailError extends Error {
   constructor(email: string) {
@@ -69,12 +74,25 @@ export interface StorageAdapter {
   getActiveMembership(babyId: string, userId: string): Promise<BabyMember | null>;
   listBabyMembers(babyId: string): Promise<BabyMember[]>;
 
+  updateBabyMemberRole(input: {
+    babyId: string;
+    actorUserId: string;
+    targetUserId: string;
+    role: BabyRole;
+    now: string;
+  }): Promise<UpdateMemberRoleResult>;
+
   removeBabyMember(input: {
     babyId: string;
     targetUserId: string;
     actorUserId: string;
     now: string;
   }): Promise<RemoveMemberResult>;
+
+  promoteUserMembershipsToParent(input: {
+    userId: string;
+    now: string;
+  }): Promise<number>;
 
   applySyncMutations(input: {
     userId: string;
